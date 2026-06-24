@@ -656,9 +656,135 @@ async function getNewApiProfile(apiBase, site, token) {
   }
 }
 
+function newApiTokenId(token) {
+  return firstValue(token && token.id, token && token.token_id, token && token.tokenId);
+}
+
+function newApiNumericTokenId(token) {
+  const id = toFiniteNumber(newApiTokenId(token));
+  return id !== null && Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function normalizeNewApiTokenKeyMap(payload) {
+  const sources = [
+    payload && payload.keys,
+    payload && payload.data && payload.data.keys,
+    payload
+  ];
+
+  for (const source of sources) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+      continue;
+    }
+    const entries = Object.entries(source)
+      .filter(([, value]) => typeof value === 'string' && value.trim());
+    if (entries.length > 0) {
+      return new Map(entries.map(([id, key]) => [String(id), key]));
+    }
+  }
+
+  return new Map();
+}
+
+function extractNewApiTokenKey(payload) {
+  if (typeof payload === 'string') {
+    return payload;
+  }
+  if (payload && typeof payload === 'object') {
+    return firstValue(
+      payload.key,
+      payload.token,
+      payload.value,
+      payload.api_key,
+      payload.apiKey,
+      payload.data && payload.data.key
+    );
+  }
+  return '';
+}
+
+async function fetchNewApiTokenKeysBatch(apiBase, site, token, ids) {
+  const data = await requestJson(apiBase, '/token/batch/keys', newApiRequestOptions(site, token, {
+    method: 'POST',
+    body: { ids }
+  }));
+  return normalizeNewApiTokenKeyMap(data);
+}
+
+async function fetchNewApiTokenKey(apiBase, site, token, id) {
+  const data = await requestJson(
+    apiBase,
+    `/token/${encodeURIComponent(String(id))}/key`,
+    newApiRequestOptions(site, token, { method: 'POST' })
+  );
+  return extractNewApiTokenKey(data);
+}
+
+async function hydrateNewApiTokenKeys(apiBase, site, token, tokens) {
+  const rows = Array.isArray(tokens) ? tokens : [];
+  const fallbacks = [];
+  const ids = [...new Set(rows.map(newApiNumericTokenId).filter((id) => id !== null))];
+  const keyMap = new Map();
+
+  if (ids.length === 0) {
+    return { tokens: rows, fallbacks };
+  }
+
+  for (let index = 0; index < ids.length; index += 100) {
+    const chunk = ids.slice(index, index + 100);
+    try {
+      const chunkMap = await fetchNewApiTokenKeysBatch(apiBase, site, token, chunk);
+      for (const [id, key] of chunkMap.entries()) {
+        keyMap.set(String(id), key);
+      }
+    } catch (error) {
+      fallbacks.push(serializeError(error));
+    }
+  }
+
+  const missing = rows.filter((row) => {
+    const id = newApiNumericTokenId(row);
+    return id !== null && !keyMap.has(String(id));
+  });
+  if (missing.length > 0) {
+    const singleResults = await mapLimit(missing, 6, async (row) => {
+      const id = newApiNumericTokenId(row);
+      try {
+        return { id, key: await fetchNewApiTokenKey(apiBase, site, token, id) };
+      } catch (error) {
+        return { id, error };
+      }
+    });
+    for (const result of singleResults) {
+      if (result && result.key) {
+        keyMap.set(String(result.id), result.key);
+      } else if (result && result.error) {
+        const fallback = serializeError(result.error);
+        fallback.metadata = { ...(fallback.metadata || {}), tokenId: result.id };
+        fallbacks.push(fallback);
+      }
+    }
+  }
+
+  if (keyMap.size === 0) {
+    return { tokens: rows, fallbacks };
+  }
+
+  return {
+    tokens: rows.map((row) => {
+      const id = newApiNumericTokenId(row);
+      const key = id === null ? '' : keyMap.get(String(id));
+      return key
+        ? { ...row, key, token: key, real_key: key, full_key: key }
+        : row;
+    }),
+    fallbacks
+  };
+}
+
 async function listNewApiTokens(apiBase, site, token) {
   if (!token || isNewApiRelayToken(token)) {
-    return [];
+    return { tokens: [], fallbacks: [] };
   }
 
   const all = [];
@@ -690,7 +816,7 @@ async function listNewApiTokens(apiBase, site, token) {
     page += 1;
   } while (page <= 50);
 
-  return all;
+  return hydrateNewApiTokenKeys(apiBase, site, token, all);
 }
 
 async function getNewApiTokenUsage(apiBase, site, token) {
@@ -976,7 +1102,9 @@ async function queryNewApiSite(inputSite) {
       }
     } else {
       try {
-        keys = await listNewApiTokens(apiBase, site, token);
+        const tokenResult = await listNewApiTokens(apiBase, site, token);
+        keys = tokenResult.tokens;
+        fallbacks.push(...(tokenResult.fallbacks || []));
       } catch (error) {
         fallbacks.push(serializeError(error));
       }

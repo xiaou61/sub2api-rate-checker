@@ -5,14 +5,16 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const { createStorage } = require('./storage');
 const { normalizeSiteProvider, normalizeWebBase, querySite, serializeError } = require('./sub2apiClient');
 
+app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar');
+
 let mainWindow;
 let storage;
 const loginWindows = new Map();
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 650,
+    width: 1200,
+    height: 750,
     minWidth: 900,
     minHeight: 600,
     useContentSize: true,

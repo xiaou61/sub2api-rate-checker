@@ -5,13 +5,15 @@ const { normalizeNewApiBase, querySite } = require('../src/sub2apiClient');
 
 async function run() {
   const calls = [];
-  const installFetch = () => {
+  const installFetch = (mockOptions = {}) => {
     calls.length = 0;
     global.fetch = async (url, options = {}) => {
     const parsed = new URL(String(url));
     calls.push({
       path: parsed.pathname,
       search: parsed.search,
+      method: options.method || 'GET',
+      body: options.body,
       auth: options.headers && options.headers.Authorization,
       newApiUser: options.headers && options.headers['New-Api-User']
     });
@@ -73,7 +75,7 @@ async function run() {
             {
               id: 9,
               name: 'main',
-              key: 'mock-key-abc1234567890',
+              key: 'mock********7890',
               status: 1,
               group: 'alpha',
               remain_quota: 9,
@@ -83,6 +85,29 @@ async function run() {
           total: 1,
           page: 1,
           page_size: 100
+        }
+      };
+    } else if (parsed.pathname === '/api/token/batch/keys') {
+      if (mockOptions.batchFails) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ success: false, message: 'batch unavailable' })
+        };
+      }
+      payload = {
+        success: true,
+        data: {
+          keys: {
+            9: 'mock-key-abc1234567890'
+          }
+        }
+      };
+    } else if (parsed.pathname === '/api/token/9/key') {
+      payload = {
+        success: true,
+        data: {
+          key: 'mock-key-abc1234567890'
         }
       };
     } else if (parsed.pathname === '/api/usage/token/') {
@@ -134,8 +159,25 @@ async function run() {
   assert.equal(result.rates.tiny, 0.00001);
   assert.equal(result.keyRows.length, 1);
   assert.equal(result.keyRows[0].groupName, 'alpha');
+  assert.equal(result.keyRows[0].keyMasked, 'mock-k...7890');
   assert.equal(calls.some((call) => call.path === '/api/token/' && call.auth === 'Bearer TOKEN'), true);
+  assert.equal(calls.some((call) => call.path === '/api/token/batch/keys' && call.method === 'POST'), true);
   assert.equal(calls.some((call) => call.newApiUser === '77'), true);
+
+  installFetch({ batchFails: true });
+  const fallbackResult = await querySite({
+    id: 'n1-fallback',
+    provider: 'newapi',
+    name: 'New API Demo',
+    baseUrl: 'https://example.com',
+    authToken: 'TOKEN',
+    newApiUserId: '77'
+  });
+
+  assert.equal(fallbackResult.keyRows.length, 1);
+  assert.equal(fallbackResult.keyRows[0].keyMasked, 'mock-k...7890');
+  assert.equal(calls.some((call) => call.path === '/api/token/batch/keys'), true);
+  assert.equal(calls.some((call) => call.path === '/api/token/9/key' && call.method === 'POST'), true);
 
   installFetch();
   const relayTokenResult = await querySite({

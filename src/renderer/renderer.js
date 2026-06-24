@@ -139,6 +139,47 @@ function formatLatency(value) {
   return `${Math.round(Number(value))} ms`;
 }
 
+function statusClassForValue(value) {
+  const status = normalizeText(value);
+  if (!status || status === '-') {
+    return '';
+  }
+  const okStatuses = new Set([
+    'active',
+    'available',
+    'enabled',
+    'healthy',
+    'normal',
+    'ok',
+    'online',
+    'pass',
+    'passed',
+    'success',
+    'succeeded',
+    'up'
+  ]);
+  const badStatuses = new Set([
+    'blocked',
+    'closed',
+    'disabled',
+    'down',
+    'error',
+    'failed',
+    'inactive',
+    'offline',
+    'timeout',
+    'unavailable',
+    'unhealthy'
+  ]);
+  if (okStatuses.has(status)) {
+    return 'ok';
+  }
+  if (badStatuses.has(status)) {
+    return 'bad';
+  }
+  return '';
+}
+
 function selectedSite() {
   return state.sites.find((site) => site.id === state.selectedId) || null;
 }
@@ -172,13 +213,15 @@ function clearForm() {
   renderResults();
 }
 
-function fillForm(site) {
+function fillForm(site, options = {}) {
   state.selectedId = site.id;
-  state.groupFilter = 'all';
-  state.groupSearch = '';
-  state.selectedComparisonKey = '';
-  if (elements.groupSearch) {
-    elements.groupSearch.value = '';
+  if (!options.preserveView) {
+    state.groupFilter = 'all';
+    state.groupSearch = '';
+    state.selectedComparisonKey = '';
+    if (elements.groupSearch) {
+      elements.groupSearch.value = '';
+    }
   }
   elements.siteId.value = site.id || '';
   elements.name.value = site.name || '';
@@ -196,7 +239,9 @@ function fillForm(site) {
   elements.refreshToken.value = site.refreshToken || '';
   elements.notes.value = site.notes || '';
   renderSites();
-  renderResults();
+  if (options.render !== false) {
+    renderResults();
+  }
 }
 
 function readForm() {
@@ -478,6 +523,69 @@ function groupOptionsFromResult(result) {
   }));
 }
 
+function comparisonGroupFilterValueFromParts(groupName, platform) {
+  return `compare:${comparisonGroupKey(groupName, platform || '-')}`;
+}
+
+function comparisonGroupFilterValue(option) {
+  return comparisonGroupFilterValueFromParts(option.label, option.platform || '-');
+}
+
+function groupOptionsFromResults(results) {
+  const optionMap = new Map();
+  for (const result of results || []) {
+    if (!result || !result.ok) {
+      continue;
+    }
+    for (const option of groupOptionsFromResult(result)) {
+      const value = comparisonGroupFilterValue(option);
+      const rate = toPositiveRate(option.rate);
+      const existing = optionMap.get(value);
+      const siteNames = new Set(existing ? existing.siteNames || [] : []);
+      siteNames.add(result.siteName || result.baseUrl || result.siteId);
+      const aliases = new Set([
+        ...(existing ? existing.aliases || [] : []),
+        ...(option.aliases || []),
+        normalizeText(option.label)
+      ]);
+      const rates = [
+        ...(existing ? existing.rates || [] : []),
+        ...(rate === null ? [] : [rate])
+      ];
+
+      optionMap.set(value, {
+        value,
+        label: option.label,
+        platform: option.platform || '',
+        rate: rates.length ? Math.min(...rates) : null,
+        status: `${siteNames.size} 家报价`,
+        aliases: [...aliases].filter(Boolean),
+        siteNames: [...siteNames],
+        rates
+      });
+    }
+  }
+
+  return [...optionMap.values()].sort((a, b) => {
+    const rateA = toPositiveRate(a.rate);
+    const rateB = toPositiveRate(b.rate);
+    if (rateA !== null && rateB !== null && rateA !== rateB) {
+      return rateA - rateB;
+    }
+    if (rateA !== null && rateB === null) {
+      return -1;
+    }
+    if (rateA === null && rateB !== null) {
+      return 1;
+    }
+    const platformCompare = String(a.platform || '').localeCompare(String(b.platform || ''), 'zh-Hans-CN');
+    if (platformCompare !== 0) {
+      return platformCompare;
+    }
+    return String(a.label || '').localeCompare(String(b.label || ''), 'zh-Hans-CN');
+  });
+}
+
 function groupSourceLabel(result) {
   if (!selectedSite()) {
     return '未选站点';
@@ -523,6 +631,11 @@ function optionMatchesRow(option, row) {
   if (row.groupId !== null && row.groupId !== undefined && String(row.groupId) === String(option.value)) {
     return true;
   }
+  const optionPlatform = normalizeText(option.platform);
+  const rowPlatform = normalizeText(row.platform || row.provider);
+  if (optionPlatform && optionPlatform !== '-' && rowPlatform && optionPlatform !== rowPlatform) {
+    return false;
+  }
   const rowLabel = normalizeText(row.groupName);
   const optionLabel = normalizeText(option.label);
   if (rowLabel && rowLabel === optionLabel) {
@@ -539,6 +652,10 @@ function rowMatchesGroup(row, groupFilter = state.groupFilter, result = selected
     return rowHasNoGroup(row);
   }
   if (row.groupId !== null && row.groupId !== undefined && String(row.groupId) === groupFilter) {
+    return true;
+  }
+  const activeOption = activeFilterOption();
+  if (activeOption && optionMatchesRow(activeOption, row)) {
     return true;
   }
   const selectedOption = groupOptionsFromResult(result).find((option) => String(option.value) === String(groupFilter));
@@ -559,6 +676,27 @@ function countRowsForFilter(result, groupFilter) {
   return { keys, monitors, total: keys + monitors };
 }
 
+function countRowsForResults(results, groupFilter) {
+  return (results || []).reduce((total, result) => {
+    const counts = countRowsForFilter(result, groupFilter);
+    return {
+      keys: total.keys + counts.keys,
+      monitors: total.monitors + counts.monitors,
+      total: total.total + counts.total
+    };
+  }, { keys: 0, monitors: 0, total: 0 });
+}
+
+function groupTotalForEntry(entry, options) {
+  if (entry.kind === 'all') {
+    return options.length;
+  }
+  if (entry.kind === 'group') {
+    return 1;
+  }
+  return entry.counts.total;
+}
+
 function groupEntryMatchesSearch(entry, query) {
   if (!query) {
     return true;
@@ -567,6 +705,7 @@ function groupEntryMatchesSearch(entry, query) {
     entry.label,
     entry.platform,
     entry.status,
+    ...(entry.siteNames || []),
     toPositiveRate(entry.rate) !== null ? `x${formatRateValue(entry.rate)}` : '',
     entry.kind
   ].join(' ').toLowerCase();
@@ -595,7 +734,7 @@ function setGroupDropdownOpen(isOpen) {
   }
 }
 
-function currentGroupEntry(result) {
+function currentGroupEntry(result, options = groupOptionsFromResult(result), countForFilter = (value) => countRowsForFilter(result, value)) {
   if (state.groupFilter === 'all') {
     return {
       value: 'all',
@@ -604,7 +743,7 @@ function currentGroupEntry(result) {
       rate: null,
       status: '',
       kind: 'all',
-      counts: countRowsForFilter(result, 'all')
+      counts: countForFilter('all')
     };
   }
   if (state.groupFilter === 'ungrouped') {
@@ -615,15 +754,15 @@ function currentGroupEntry(result) {
       rate: null,
       status: '',
       kind: 'ungrouped',
-      counts: countRowsForFilter(result, 'ungrouped')
+      counts: countForFilter('ungrouped')
     };
   }
-  const option = groupOptionsFromResult(result).find((item) => String(item.value) === String(state.groupFilter));
+  const option = options.find((item) => String(item.value) === String(state.groupFilter));
   if (option) {
     return {
       ...option,
       kind: 'group',
-      counts: countRowsForFilter(result, option.value)
+      counts: countForFilter(option.value)
     };
   }
   return null;
@@ -633,11 +772,16 @@ function renderGroupDirectory(result) {
   if (elements.groupFilterLabel) {
     elements.groupFilterLabel.textContent = '分组筛选';
   }
-  if (elements.groupSourceText) {
-    elements.groupSourceText.textContent = groupSourceLabel(result);
-  }
 
   const site = selectedSite();
+  const successResults = successfulResults();
+  const useAllSiteGroups = successResults.length > 1;
+  const directoryResults = useAllSiteGroups ? successResults : result && result.ok ? [result] : [];
+  if (elements.groupSourceText) {
+    elements.groupSourceText.textContent = useAllSiteGroups
+      ? `全站比价 · ${directoryResults.length} 个站点`
+      : groupSourceLabel(result);
+  }
   if (!elements.groupList || !elements.groupDropdownBtn) {
     return;
   }
@@ -652,7 +796,7 @@ function renderGroupDirectory(result) {
     setGroupDropdownOpen(false);
     return;
   }
-  if (!result) {
+  if (!result && directoryResults.length === 0) {
     if (elements.groupCount) {
       elements.groupCount.textContent = '0';
     }
@@ -663,7 +807,7 @@ function renderGroupDirectory(result) {
     setGroupDropdownOpen(false);
     return;
   }
-  if (!result.ok) {
+  if (result && !result.ok && directoryResults.length === 0) {
     if (elements.groupCount) {
       elements.groupCount.textContent = '0';
     }
@@ -675,7 +819,12 @@ function renderGroupDirectory(result) {
     return;
   }
 
-  const options = groupOptionsFromResult(result);
+  const countForFilter = (value) => useAllSiteGroups
+    ? countRowsForResults(directoryResults, value)
+    : countRowsForFilter(result, value);
+  const options = useAllSiteGroups
+    ? groupOptionsFromResults(directoryResults)
+    : groupOptionsFromResult(result);
   const validValues = new Set(['all', 'ungrouped', ...options.map((option) => option.value)]);
   if (!validValues.has(state.groupFilter)) {
     state.groupFilter = 'all';
@@ -689,7 +838,7 @@ function renderGroupDirectory(result) {
     {
       value: 'all',
       label: '全部分组',
-      platform: '全站比价',
+      platform: useAllSiteGroups ? `${directoryResults.length} 个站点` : '全站比价',
       rate: null,
       status: '',
       kind: 'all'
@@ -697,7 +846,7 @@ function renderGroupDirectory(result) {
     {
       value: 'ungrouped',
       label: '未绑定',
-      platform: '无分组 Key / 监控',
+      platform: useAllSiteGroups ? '全站未绑定 Key / 监控' : '无分组 Key / 监控',
       rate: null,
       status: '',
       kind: 'ungrouped'
@@ -708,18 +857,18 @@ function renderGroupDirectory(result) {
     }))
   ].map((entry) => ({
     ...entry,
-    counts: countRowsForFilter(result, entry.value)
+    counts: countForFilter(entry.value)
   }));
 
-  const currentEntry = currentGroupEntry(result) || entries[0];
+  const currentEntry = currentGroupEntry(result, options, countForFilter) || entries[0];
   if (elements.groupDropdownValue) {
     elements.groupDropdownValue.textContent = currentEntry.label;
   }
   if (elements.groupDropdownMeta) {
     const currentRate = toPositiveRate(currentEntry.rate);
     elements.groupDropdownMeta.textContent = currentRate === null
-      ? `${options.length} 个分组 · 按倍率排序`
-      : `${currentEntry.platform || '分组'} · x${formatRateValue(currentRate)}`;
+      ? `${options.length} 个分组 · ${useAllSiteGroups ? `${directoryResults.length} 个站点` : '按倍率排序'}`
+      : [currentEntry.platform || '分组', `x${formatRateValue(currentRate)}`, currentEntry.status].filter(Boolean).join(' · ');
   }
 
   const query = state.groupSearch.trim().toLowerCase();
@@ -733,11 +882,12 @@ function renderGroupDirectory(result) {
   elements.groupList.innerHTML = filteredEntries
     .map((entry) => {
       const active = entry.value === state.groupFilter ? ' active' : '';
-      const empty = entry.counts.total === 0 && entry.kind === 'group' ? ' is-empty' : '';
+      const groupTotal = groupTotalForEntry(entry, options);
+      const empty = groupTotal === 0 && entry.kind !== 'all' ? ' is-empty' : '';
       const rate = toPositiveRate(entry.rate) !== null ? `x${formatRateValue(entry.rate)}` : '';
       const status = entry.status && entry.status !== 'active' ? entry.status : '';
-      const meta = [entry.platform, rate, status].filter(Boolean);
-      const totalLabel = entry.counts.total === 0 ? '0' : String(entry.counts.total);
+      const meta = [entry.platform, status].filter(Boolean);
+      const totalLabel = String(groupTotal);
 
       return `
         <button class="group-row${active}${empty}" type="button" data-group-value="${escapeHtml(entry.value)}" aria-pressed="${entry.value === state.groupFilter ? 'true' : 'false'}">
@@ -745,7 +895,10 @@ function renderGroupDirectory(result) {
             <span class="group-name">${escapeHtml(entry.label)}</span>
             <span class="group-total">${escapeHtml(totalLabel)}</span>
           </span>
-          <span class="group-meta">${meta.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}</span>
+          <span class="group-meta">
+            ${meta.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}
+            ${rate ? `<strong class="group-rate-chip">${escapeHtml(rate)}</strong>` : ''}
+          </span>
           <span class="group-counts">
             <span>Key ${entry.counts.keys}</span>
             <span>监控 ${entry.counts.monitors}</span>
@@ -758,6 +911,7 @@ function renderGroupDirectory(result) {
   for (const button of elements.groupList.querySelectorAll('.group-row')) {
     button.addEventListener('click', () => {
       state.groupFilter = button.dataset.groupValue;
+      syncSelectedSiteToBestOfferForActiveFilter();
       setGroupDropdownOpen(false);
       renderResults();
     });
@@ -775,6 +929,10 @@ function successfulResults() {
 function activeFilterOption() {
   if (state.groupFilter === 'all' || state.groupFilter === 'ungrouped') {
     return null;
+  }
+  const aggregateOption = groupOptionsFromResults(successfulResults()).find((option) => String(option.value) === String(state.groupFilter));
+  if (aggregateOption) {
+    return aggregateOption;
   }
   const selected = selectedResult();
   const selectedOption = groupOptionsFromResult(selected).find((option) => String(option.value) === String(state.groupFilter));
@@ -814,13 +972,14 @@ function optionMatchesActiveFilter(option) {
   return sameLabel && samePlatform;
 }
 
-function buildComparisonEntries() {
+function buildComparisonEntries(options = {}) {
   const entries = [];
   const seen = new Map();
+  const applyFilter = options.applyFilter !== false;
 
   for (const result of successfulResults()) {
     for (const option of groupOptionsFromResult(result)) {
-      if (!optionMatchesActiveFilter(option)) {
+      if (applyFilter && !optionMatchesActiveFilter(option)) {
         continue;
       }
       const rate = toPositiveRate(option.rate);
@@ -929,6 +1088,16 @@ function selectedComparisonGroup(groups) {
   return selected || groups[0];
 }
 
+function filteredComparisonGroups() {
+  const entries = buildComparisonEntries().filter((entry) => toPositiveRate(entry.rate) !== null && formatRateValue(entry.rate));
+  return buildPriceComparisonGroups(entries);
+}
+
+function globalComparisonGroups() {
+  const entries = buildComparisonEntries({ applyFilter: false }).filter((entry) => toPositiveRate(entry.rate) !== null && formatRateValue(entry.rate));
+  return buildPriceComparisonGroups(entries);
+}
+
 function offerSitesText(offers, limit = 3) {
   const urls = offers.map((offer) => offer.baseUrl || offer.siteName).filter(Boolean);
   const visible = urls.slice(0, limit).join(' / ');
@@ -952,8 +1121,8 @@ function renderComparison() {
     return;
   }
 
-  const entries = buildComparisonEntries().filter((entry) => toPositiveRate(entry.rate) !== null && formatRateValue(entry.rate));
-  const groups = buildPriceComparisonGroups(entries);
+  const allGroups = globalComparisonGroups();
+  const groups = filteredComparisonGroups();
   if (elements.comparisonCount) {
     elements.comparisonCount.textContent = String(groups.length);
   }
@@ -967,7 +1136,7 @@ function renderComparison() {
     return;
   }
 
-  if (groups.length === 0) {
+  if (allGroups.length === 0) {
     elements.bestOffer.innerHTML = '<div class="empty-state compact"><strong>没有拿到有效倍率</strong><span>检查 Token 或站点分组接口。</span></div>';
     elements.comparisonRows.innerHTML = '';
     if (elements.comparisonOffers) {
@@ -976,20 +1145,30 @@ function renderComparison() {
     return;
   }
 
-  const selectedGroup = selectedComparisonGroup(groups);
-  state.selectedComparisonKey = selectedGroup.key;
-  const bestLabel = selectedGroup.bestSites.length > 1
-    ? `并列最低 · ${selectedGroup.bestSites.length} 个站点`
+  const globalBestGroup = allGroups[0];
+  const bestLabel = globalBestGroup.bestSites.length > 1
+    ? `并列最低 · ${globalBestGroup.bestSites.length} 个站点`
     : '当前最低';
-  const bestSite = selectedGroup.bestSites[0];
+  const bestSite = globalBestGroup.bestSites[0];
   elements.bestOffer.innerHTML = `
-    <button class="best-offer-card" type="button" data-comparison-key="${escapeHtml(selectedGroup.key)}" data-site-id="${escapeHtml(bestSite.siteId)}" data-group-name="${escapeHtml(selectedGroup.groupName)}" data-platform="${escapeHtml(selectedGroup.platform)}">
+    <button class="best-offer-card" type="button" data-comparison-key="${escapeHtml(globalBestGroup.key)}" data-site-id="${escapeHtml(bestSite.siteId)}" data-group-name="${escapeHtml(globalBestGroup.groupName)}" data-platform="${escapeHtml(globalBestGroup.platform)}">
       <span class="best-kicker">${escapeHtml(bestLabel)}</span>
-      <strong>${escapeHtml(selectedGroup.groupName)}</strong>
-      <span class="best-rate">x${escapeHtml(formatRateValue(selectedGroup.bestRate))}</span>
-      <span class="best-site">${escapeHtml(offerSitesText(selectedGroup.bestSites, 4))}</span>
+      <strong>${escapeHtml(globalBestGroup.groupName)}</strong>
+      <span class="best-rate">x${escapeHtml(formatRateValue(globalBestGroup.bestRate))}</span>
+      <span class="best-site">${escapeHtml(offerSitesText(globalBestGroup.bestSites, 4))}</span>
     </button>
   `;
+
+  if (groups.length === 0) {
+    elements.comparisonRows.innerHTML = '<div class="empty-state compact"><strong>当前筛选无报价</strong><span>切回全部分组查看完整比价。</span></div>';
+    if (elements.comparisonOffers) {
+      elements.comparisonOffers.innerHTML = '';
+    }
+    return;
+  }
+
+  const selectedGroup = selectedComparisonGroup(groups);
+  state.selectedComparisonKey = selectedGroup.key;
 
   elements.comparisonRows.innerHTML = groups
     .map((group, index) => {
@@ -1060,7 +1239,7 @@ function selectComparisonTarget(siteId, groupName, platform, comparisonKey = '')
   if (!site) {
     return;
   }
-  fillForm(site);
+  fillForm(site, { preserveView: true, render: false });
   state.selectedComparisonKey = comparisonKey || comparisonGroupKey(groupName, platform);
   const result = selectedResult();
   const option = groupOptionsFromResult(result).find((item) => {
@@ -1068,8 +1247,26 @@ function selectComparisonTarget(siteId, groupName, platform, comparisonKey = '')
     const samePlatform = !platform || platform === '-' || !item.platform || normalizeText(item.platform) === normalizeText(platform);
     return sameLabel && samePlatform;
   });
-  state.groupFilter = option ? option.value : 'all';
+  const aggregateValue = comparisonGroupFilterValueFromParts(groupName, platform);
+  const hasAggregateValue = groupOptionsFromResults(successfulResults()).some((item) => item.value === aggregateValue);
+  state.groupFilter = hasAggregateValue ? aggregateValue : option ? option.value : 'all';
   renderResults();
+}
+
+function syncSelectedSiteToBestOfferForActiveFilter() {
+  if (state.groupFilter === 'all' || state.groupFilter === 'ungrouped') {
+    return;
+  }
+  const groups = filteredComparisonGroups();
+  const selectedGroup = selectedComparisonGroup(groups);
+  const bestSiteId = selectedGroup && selectedGroup.bestSites[0] ? selectedGroup.bestSites[0].siteId : '';
+  if (!bestSiteId || bestSiteId === state.selectedId) {
+    return;
+  }
+  const site = state.sites.find((item) => item.id === bestSiteId);
+  if (site) {
+    fillForm(site, { preserveView: true, render: false });
+  }
 }
 
 function filteredKeyRows() {
@@ -1079,6 +1276,16 @@ function filteredKeyRows() {
 }
 
 function filteredMonitorRows() {
+  if (state.groupFilter === 'all' && successfulResults().length > 1) {
+    return successfulResults().flatMap((result) =>
+      (result.monitorRows || []).map((row) => ({
+        ...row,
+        siteId: result.siteId,
+        siteName: row.siteName || result.siteName,
+        baseUrl: row.baseUrl || result.baseUrl
+      }))
+    );
+  }
   const result = selectedResult();
   const rows = result ? result.monitorRows || [] : [];
   return rows.filter((row) => rowMatchesGroup(row));
@@ -1131,7 +1338,7 @@ function renderResults() {
         const defaultRate = toPositiveRate(row.defaultRate) === null ? '' : formatRateValue(row.defaultRate);
         const custom = toPositiveRate(row.customRate) === null ? '' : formatRateValue(row.customRate);
         const effective = toPositiveRate(row.effectiveRate) === null ? '' : formatRateValue(row.effectiveRate);
-        const statusClass = row.keyStatus === 'active' ? 'ok' : row.keyStatus ? 'bad' : '';
+        const statusClass = statusClassForValue(row.keyStatus);
         const quota = row.quota || row.quotaUsed ? `${formatRate(row.quotaUsed || 0)} / ${formatRate(row.quota || 0)}` : '';
         return `
           <tr>
@@ -1155,11 +1362,10 @@ function renderResults() {
   } else {
     elements.monitorRows.innerHTML = monitorRows
       .map((row) => {
-        const statusClass = row.primaryStatus === 'healthy' || row.primaryStatus === 'success' || row.primaryStatus === 'available'
-          ? 'ok'
-          : row.primaryStatus
-            ? 'bad'
-            : '';
+        const statusClass = statusClassForValue(row.primaryStatus);
+        const siteMeta = row.siteName
+          ? `<div class="mono">${escapeHtml(row.siteName)}${row.baseUrl ? ` · ${escapeHtml(row.baseUrl)}` : ''}</div>`
+          : '';
         const models = (row.models || [])
           .slice(0, 6)
           .map((model) => {
@@ -1173,7 +1379,7 @@ function renderResults() {
 
         return `
           <tr>
-            <td><div>${escapeHtml(row.name)}</div><div class="mono">#${escapeHtml(row.monitorId)}</div></td>
+            <td><div>${escapeHtml(row.name)}</div><div class="mono">#${escapeHtml(row.monitorId)}</div>${siteMeta}</td>
             <td>${escapeHtml(row.groupName)}</td>
             <td>${escapeHtml(row.provider)}</td>
             <td>${escapeHtml(row.primaryModel)}</td>

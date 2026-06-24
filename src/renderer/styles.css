@@ -21,6 +21,9 @@
   --ok-soft: #dcfce7;
   --warn: #b45309;
   --warn-soft: #fffbeb;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: #8aa6d6;
+  --scrollbar-thumb-hover: var(--primary);
   --shadow: 0 4px 8px rgba(15, 23, 42, 0.06);
   --radius: 8px;
   --mono: "Fira Code", "Geist Mono", Consolas, "Cascadia Mono", monospace;
@@ -29,6 +32,109 @@
 
 * {
   box-sizing: border-box;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
+}
+
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+*::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  border: 0;
+  background-color: transparent !important;
+  background-image: none !important;
+  -webkit-appearance: none;
+}
+
+*::-webkit-scrollbar-button:single-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+*::-webkit-scrollbar-button:vertical {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+*::-webkit-scrollbar-button:horizontal {
+  display: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+*::-webkit-scrollbar-button:increment,
+*::-webkit-scrollbar-button:decrement {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+*::-webkit-scrollbar-button:start,
+*::-webkit-scrollbar-button:end {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+*::-webkit-scrollbar-button:vertical:decrement,
+*::-webkit-scrollbar-button:vertical:increment,
+*::-webkit-scrollbar-button:horizontal:decrement,
+*::-webkit-scrollbar-button:horizontal:increment {
+  background-color: transparent !important;
+  background-image: none !important;
+  color: transparent;
+}
+
+*::-webkit-scrollbar-track {
+  overflow: hidden;
+  border-radius: 999px;
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  min-width: 36px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 html,
@@ -427,6 +533,7 @@ h1 {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .site-row {
@@ -528,6 +635,7 @@ form {
   gap: 8px;
   overflow: auto;
   padding: 10px 12px;
+  scrollbar-gutter: stable;
 }
 
 label,
@@ -808,11 +916,12 @@ label span,
   min-height: 0;
   overflow: auto;
   padding: 6px;
+  scrollbar-gutter: stable;
 }
 
 .group-menu .group-list {
   max-height: min(var(--group-list-max-height, 310px), calc(100vh - 190px));
-  padding: 8px 0 0;
+  padding: 8px 8px 0 0;
 }
 
 .group-row {
@@ -887,6 +996,29 @@ label span,
   line-height: 1.2;
 }
 
+.group-rate-chip {
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(15, 118, 110, 0.2);
+  border-radius: 999px;
+  padding: 0 8px;
+  background: var(--teal-soft);
+  color: var(--teal);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.65);
+}
+
+.group-row.active .group-rate-chip {
+  border-color: rgba(30, 64, 175, 0.25);
+  background: #ffffff;
+  color: var(--primary);
+}
+
 .group-counts span {
   min-height: 18px;
   display: inline-flex;
@@ -905,6 +1037,7 @@ label span,
   gap: 5px;
   overflow: auto;
   padding: 0 10px 10px;
+  scrollbar-gutter: stable;
 }
 
 .comparison-row {
@@ -1102,6 +1235,7 @@ label span,
   flex: 1;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 table {
@@ -1267,6 +1401,7 @@ td.empty-row {
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 #failures > .empty-row {
