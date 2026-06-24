@@ -51,7 +51,11 @@ npm start
 npm run dist
 ```
 
-The current Windows unpacked build can also be produced with electron-builder's `dir` target.
+For a fast Windows unpacked build during development:
+
+```bash
+npx electron-builder --win dir --publish never --config.directories.output=dist-newapi
+```
 
 ## Security
 
