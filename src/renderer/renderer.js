@@ -70,7 +70,7 @@ function setStatus(message, type = '') {
   if (!elements.statusBar) {
     return;
   }
-  elements.statusBar.textContent = message;
+  elements.statusBar.innerHTML = `<span class="status-message">${escapeHtml(message)}</span>`;
   elements.statusBar.className = `status-bar ${type}`.trim();
 }
 
@@ -577,6 +577,15 @@ function setGroupDropdownOpen(isOpen) {
   state.groupDropdownOpen = Boolean(isOpen);
   if (elements.groupDropdownMenu) {
     elements.groupDropdownMenu.hidden = !state.groupDropdownOpen;
+    if (state.groupDropdownOpen && elements.groupDropdownBtn) {
+      positionGroupDropdown();
+    } else {
+      elements.groupDropdownMenu.style.left = '';
+      elements.groupDropdownMenu.style.top = '';
+      elements.groupDropdownMenu.style.width = '';
+      elements.groupDropdownMenu.style.maxHeight = '';
+      elements.groupDropdownMenu.style.removeProperty('--group-list-max-height');
+    }
   }
   if (elements.groupDropdownBtn) {
     elements.groupDropdownBtn.setAttribute('aria-expanded', state.groupDropdownOpen ? 'true' : 'false');
@@ -752,6 +761,10 @@ function renderGroupDirectory(result) {
       setGroupDropdownOpen(false);
       renderResults();
     });
+  }
+
+  if (state.groupDropdownOpen) {
+    positionGroupDropdown();
   }
 }
 
@@ -1291,6 +1304,89 @@ async function captureLoginTokens() {
   }
 }
 
+function positionGroupDropdown() {
+  if (!elements.groupDropdownBtn || !elements.groupDropdownMenu) {
+    return;
+  }
+
+  const buttonRect = elements.groupDropdownBtn.getBoundingClientRect();
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  const margin = 12;
+  const gap = 8;
+  const maxWidth = Math.max(0, viewportWidth - margin * 2);
+  const minWidth = Math.min(320, maxWidth);
+  const width = Math.min(Math.max(buttonRect.width, minWidth), maxWidth);
+  const leftLimit = Math.max(margin, viewportWidth - width - margin);
+  const left = Math.min(Math.max(margin, buttonRect.right - width), leftLimit);
+  const spaceBelow = Math.max(0, viewportHeight - buttonRect.bottom - gap - margin);
+  const spaceAbove = Math.max(0, buttonRect.top - gap - margin);
+  const shouldOpenAbove = spaceBelow < 180 && spaceAbove > spaceBelow;
+  const availableHeight = shouldOpenAbove ? spaceAbove : spaceBelow;
+  const maxHeight = Math.min(380, Math.max(160, availableHeight || viewportHeight - margin * 2));
+  const unclampedTop = shouldOpenAbove
+    ? buttonRect.top - gap - maxHeight
+    : buttonRect.bottom + gap;
+  const topLimit = Math.max(margin, viewportHeight - maxHeight - margin);
+  const top = Math.min(Math.max(margin, unclampedTop), topLimit);
+
+  elements.groupDropdownMenu.style.left = `${left}px`;
+  elements.groupDropdownMenu.style.top = `${top}px`;
+  elements.groupDropdownMenu.style.width = `${width}px`;
+  elements.groupDropdownMenu.style.maxHeight = `${maxHeight}px`;
+  elements.groupDropdownMenu.style.setProperty('--group-list-max-height', `${Math.max(96, maxHeight - 64)}px`);
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+const CONTENT_COLUMN_HANDLE_WIDTH = 10;
+
+function defaultContentColumnLeftWidth(contentColumn) {
+  const availableWidth = Math.max(0, contentColumn.offsetWidth - CONTENT_COLUMN_HANDLE_WIDTH);
+  return Math.round(availableWidth / 2);
+}
+
+function applySiteColumnWidth(siteColumn, width) {
+  const consoleGrid = document.querySelector('.console-grid');
+  const availableWidth = consoleGrid
+    ? consoleGrid.getBoundingClientRect().width
+    : (window.innerWidth || document.documentElement.clientWidth);
+  const handleWidth = 12;
+  const minContentWidth = 600;
+  const maxWidth = Math.max(200, availableWidth - handleWidth - minContentWidth);
+  const nextWidth = clampNumber(width, 200, maxWidth);
+  siteColumn.style.width = `${nextWidth}px`;
+  siteColumn.style.flexBasis = `${nextWidth}px`;
+  siteColumn.style.flexGrow = '0';
+  siteColumn.style.flexShrink = '0';
+  return nextWidth;
+}
+
+function applyContentColumnSplit(contentColumn, leftWidth) {
+  const contentWidth = contentColumn.offsetWidth;
+  const handleWidth = CONTENT_COLUMN_HANDLE_WIDTH;
+  const styles = getComputedStyle(contentColumn);
+  const columnGap = Number.parseFloat(styles.columnGap) || 0;
+  const availableWidth = Math.max(0, contentWidth - handleWidth - columnGap * 2);
+  const minColumnWidth = Math.min(300, Math.max(220, Math.round(availableWidth * 0.35)));
+  const maxLeft = availableWidth - minColumnWidth;
+  if (maxLeft <= minColumnWidth) {
+    contentColumn.style.gridTemplateColumns = '';
+    return null;
+  }
+  const nextLeft = clampNumber(leftWidth, minColumnWidth, maxLeft);
+  const rightWidth = availableWidth - nextLeft;
+  contentColumn.style.gridTemplateColumns = `${nextLeft}px ${handleWidth}px ${rightWidth}px`;
+  return nextLeft;
+}
+
+function resetDragState() {
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+}
+
 async function queryAll() {
   if (state.sites.length === 0) {
     setStatus('请先保存站点', 'bad');
@@ -1340,13 +1436,94 @@ async function init() {
       return;
     }
     const picker = event.target.closest('.group-picker');
-    if (!picker) {
+    const menu = event.target.closest('.group-menu');
+    if (!picker && !menu) {
       setGroupDropdownOpen(false);
     }
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && state.groupDropdownOpen) {
       setGroupDropdownOpen(false);
+    }
+  });
+  // Resize handle logic
+  const resizeHandle = document.getElementById('resizeHandle');
+  const siteColumn = document.querySelector('.site-column');
+  const consoleGrid = document.querySelector('.console-grid');
+  if (resizeHandle && siteColumn && consoleGrid) {
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    resizeHandle.addEventListener('mousedown', (e) => {
+      isResizing = true;
+      startX = e.clientX;
+      startWidth = siteColumn.offsetWidth;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isResizing) return;
+      const diff = e.clientX - startX;
+      applySiteColumnWidth(siteColumn, startWidth + diff);
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isResizing) {
+        isResizing = false;
+        resetDragState();
+      }
+    });
+  }
+
+  // Inner resize handle logic for content-column columns
+  const innerResizeHandle = document.getElementById('innerResizeHandle');
+  const contentColumn = document.querySelector('.content-column');
+  if (innerResizeHandle && contentColumn) {
+    let isInnerResizing = false;
+    let innerStartX = 0;
+    let innerStartLeftWidth = 0;
+
+    innerResizeHandle.addEventListener('mousedown', (e) => {
+      isInnerResizing = true;
+      innerStartX = e.clientX;
+      const cols = contentColumn.style.gridTemplateColumns;
+      if (cols) {
+        const parts = cols.split(' ');
+        innerStartLeftWidth = parseInt(parts[0], 10) || defaultContentColumnLeftWidth(contentColumn);
+      } else {
+        innerStartLeftWidth = defaultContentColumnLeftWidth(contentColumn);
+      }
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isInnerResizing) return;
+      const diff = e.clientX - innerStartX;
+      applyContentColumnSplit(contentColumn, innerStartLeftWidth + diff);
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isInnerResizing) {
+        isInnerResizing = false;
+        resetDragState();
+      }
+    });
+  }
+  window.addEventListener('resize', () => {
+    if (siteColumn && siteColumn.style.flexBasis) {
+      applySiteColumnWidth(siteColumn, siteColumn.offsetWidth);
+    }
+    if (contentColumn && contentColumn.style.gridTemplateColumns) {
+      const firstColumn = parseInt(contentColumn.style.gridTemplateColumns.split(' ')[0], 10);
+      applyContentColumnSplit(contentColumn, firstColumn || defaultContentColumnLeftWidth(contentColumn));
+    }
+    if (state.groupDropdownOpen) {
+      positionGroupDropdown();
     }
   });
   if (elements.groupSearch) {

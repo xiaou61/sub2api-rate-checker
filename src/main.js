@@ -11,10 +11,11 @@ const loginWindows = new Map();
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    minWidth: 1040,
-    minHeight: 680,
+    width: 1000,
+    height: 650,
+    minWidth: 900,
+    minHeight: 600,
+    useContentSize: true,
     title: 'Sub2API Rate Checker',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

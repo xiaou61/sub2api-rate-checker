@@ -1,13 +1,28 @@
 'use strict';
 
 const path = require('node:path');
-const { app, BrowserWindow } = require('electron');
+const { spawnSync } = require('node:child_process');
+const electron = require('electron');
+
+if (!electron.app) {
+  const executable = typeof electron === 'string' ? electron : process.execPath;
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const result = spawnSync(executable, [__filename], {
+    env,
+    stdio: 'inherit',
+    windowsHide: true
+  });
+  process.exit(result.status || 0);
+}
+
+const { app, BrowserWindow } = electron;
 
 async function run() {
   await app.whenReady();
   const win = new BrowserWindow({
-    width: 1365,
-    height: 768,
+    width: 1000,
+    height: 650,
     show: false,
     webPreferences: {
       contextIsolation: true,
@@ -21,6 +36,17 @@ async function run() {
 
   const result = await win.webContents.executeJavaScript(`
     (() => {
+      const rect = (selector) => {
+        const element = document.querySelector(selector);
+        if (!element) return null;
+        const box = element.getBoundingClientRect();
+        return {
+          width: Math.round(box.width),
+          height: Math.round(box.height),
+          x: Math.round(box.x),
+          y: Math.round(box.y)
+        };
+      };
       const provider = document.getElementById('provider');
       const newApiUserId = document.getElementById('newApiUserId');
       const title = document.querySelector('h1');
@@ -33,7 +59,19 @@ async function run() {
         hasComparisonRows: Boolean(document.getElementById('comparisonRows')),
         hasComparisonOffers: Boolean(document.getElementById('comparisonOffers')),
         bodyWidth: document.body.scrollWidth,
-        windowWidth: window.innerWidth
+        bodyHeight: document.body.scrollHeight,
+        windowWidth: window.innerWidth,
+        windowHeight: window.innerHeight,
+        topbar: rect('.topbar'),
+        siteColumn: rect('.site-column'),
+        contentColumn: rect('.content-column'),
+        statusBar: rect('.status-bar'),
+        comparisonPanel: rect('.comparison-panel'),
+        detailHead: rect('.detail-head'),
+        summaryStrip: rect('.summary-strip'),
+        resultsPanel: rect('.results-panel'),
+        monitorPanel: rect('.monitor-panel'),
+        failuresPanel: rect('.failures-panel')
       };
     })()
   `);
@@ -52,6 +90,23 @@ async function run() {
   }
   if (result.bodyWidth > result.windowWidth + 2) {
     throw new Error(`Renderer overflows horizontally: ${result.bodyWidth} > ${result.windowWidth}`);
+  }
+  if (result.bodyHeight > result.windowHeight + 2) {
+    throw new Error(`Renderer overflows vertically: ${result.bodyHeight} > ${result.windowHeight}`);
+  }
+  for (const key of ['topbar', 'siteColumn', 'contentColumn', 'statusBar', 'comparisonPanel', 'detailHead', 'summaryStrip', 'resultsPanel', 'monitorPanel', 'failuresPanel']) {
+    if (!result[key] || result[key].width <= 0 || result[key].height <= 0) {
+      throw new Error(`Layout region is missing or collapsed: ${key}`);
+    }
+  }
+  if (result.topbar.height < 68 || result.topbar.height > 86) {
+    throw new Error(`Unexpected topbar height: ${result.topbar.height}`);
+  }
+  if (result.siteColumn.width < 270 || result.siteColumn.width > 310) {
+    throw new Error(`Unexpected site column width: ${result.siteColumn.width}`);
+  }
+  if (result.resultsPanel.height < 180 || result.monitorPanel.height < 180) {
+    throw new Error(`Data panels are too short: results=${result.resultsPanel.height}, monitor=${result.monitorPanel.height}`);
   }
 
   const comparison = await win.webContents.executeJavaScript(`
