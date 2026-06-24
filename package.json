@@ -1,0 +1,39 @@
+{
+  "name": "sub2api-rate-checker",
+  "version": "0.1.0",
+  "description": "Desktop rate comparison console for sub2api and New API relay stations.",
+  "main": "src/main.js",
+  "private": false,
+  "license": "MIT",
+  "keywords": [
+    "sub2api",
+    "new-api",
+    "electron",
+    "rate-checker",
+    "relay"
+  ],
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/storage.js && node --check src/sub2apiClient.js && node --check src/renderer/renderer.js && node --check scripts/check-rate-format.js && node --check scripts/check-newapi-client.js && node --check scripts/smoke-ui.js && node scripts/check-rate-format.js && node scripts/check-newapi-client.js",
+    "smoke:ui": "electron scripts/smoke-ui.js",
+    "test": "npm run check",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "local.sub2api.ratechecker",
+    "productName": "Sub2API Rate Checker",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ]
+    }
+  }
+}
