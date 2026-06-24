@@ -1,6 +1,6 @@
 {
   "name": "sub2api-rate-checker",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Desktop rate comparison console for sub2api and New API relay stations.",
   "main": "src/main.js",
   "private": false,
