@@ -1137,7 +1137,7 @@ async function querySelected() {
   renderResults();
   await loadSites();
   setBusy(false);
-  setStatus(result.ok ? '查询完成' : '查询失败', result.ok ? 'ok' : 'bad');
+  setStatus(result.ok ? '查询完成' : result.error && result.error.message ? result.error.message : '查询失败', result.ok ? 'ok' : 'bad');
 }
 
 async function openBrowserLogin() {
@@ -1168,7 +1168,7 @@ async function captureLoginTokens() {
       await loadSites({ selectId: site.id });
       setStatus('已采集 token', 'ok');
     } else {
-      setStatus('未发现 auth_token', 'bad');
+      setStatus(site.provider === 'newapi' ? '未发现 New API token' : '未发现 auth_token', 'bad');
     }
   } catch (error) {
     setStatus(error.message || '采集 token 失败', 'bad');
@@ -1189,7 +1189,8 @@ async function queryAll() {
   setBusy(false);
 
   const failed = state.results.filter((result) => !result.ok).length;
-  setStatus(failed ? `查询完成，${failed} 个站点失败` : '查询完成', failed ? 'bad' : 'ok');
+  const firstError = state.results.find((result) => !result.ok && result.error && result.error.message);
+  setStatus(failed ? `查询完成，${failed} 个站点失败${firstError ? `：${firstError.error.message}` : ''}` : '查询完成', failed ? 'bad' : 'ok');
 }
 
 function setBusy(isBusy) {

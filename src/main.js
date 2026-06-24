@@ -122,7 +122,7 @@ async function readTokensFromLoginWindow(win, provider) {
   }
 
   return win.webContents.executeJavaScript(
-    `(() => {
+    `(async () => {
       try {
         const provider = ${JSON.stringify(provider || 'sub2api')};
         const storage = {};
@@ -167,7 +167,7 @@ async function readTokensFromLoginWindow(win, provider) {
           return '';
         };
         const findUserId = () => {
-          const explicit = read('user_id', 'userId', 'id', 'new_api_user_id');
+          const explicit = read('uid', 'user_id', 'userId', 'id', 'new_api_user_id');
           if (explicit) return explicit;
           for (const value of Object.values(storage)) {
             const parsed = parseJson(value);
@@ -181,11 +181,43 @@ async function readTokensFromLoginWindow(win, provider) {
           }
           return '';
         };
+        const fetchNewApiAccessToken = async (userId) => {
+          if (provider !== 'newapi' || !userId) {
+            return '';
+          }
+          try {
+            const response = await fetch('/api/user/token', {
+              method: 'GET',
+              credentials: 'include',
+              headers: {
+                Accept: 'application/json',
+                'New-Api-User': String(userId)
+              }
+            });
+            const payload = await response.json().catch(() => null);
+            if (!response.ok || !payload || payload.success === false) {
+              return '';
+            }
+            if (typeof payload.data === 'string') {
+              return payload.data;
+            }
+            if (payload.data && typeof payload.data === 'object') {
+              return payload.data.access_token || payload.data.accessToken || payload.data.token || '';
+            }
+            return '';
+          } catch {
+            return '';
+          }
+        };
+        const userId = findUserId();
+        const localToken = findToken();
+        const generatedToken = await fetchNewApiAccessToken(userId);
         return {
-          authToken: findToken(),
+          authToken: generatedToken || localToken,
           refreshToken: read('refresh_token', 'refreshToken'),
           tokenExpiresAt: read('token_expires_at', 'tokenExpiresAt', 'expires_at'),
-          newApiUserId: findUserId()
+          newApiUserId: userId,
+          source: generatedToken ? 'newapi-access-token' : localToken ? 'local-storage' : ''
         };
       } catch (error) {
         return { authToken: '', refreshToken: '', tokenExpiresAt: '', newApiUserId: '', error: String(error && error.message ? error.message : error) };

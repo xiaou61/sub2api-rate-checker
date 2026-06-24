@@ -5,7 +5,9 @@ const { normalizeNewApiBase, querySite } = require('../src/sub2apiClient');
 
 async function run() {
   const calls = [];
-  global.fetch = async (url, options = {}) => {
+  const installFetch = () => {
+    calls.length = 0;
+    global.fetch = async (url, options = {}) => {
     const parsed = new URL(String(url));
     calls.push({
       path: parsed.pathname,
@@ -16,6 +18,13 @@ async function run() {
 
     let payload;
     if (parsed.pathname === '/api/pricing') {
+      if (!options.headers.Authorization || options.headers.Authorization === 'Bearer sk-current-token') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ success: false, message: 'pricing requires login' })
+        };
+      }
       payload = {
         success: true,
         data: [
@@ -50,6 +59,13 @@ async function run() {
         data: { group: 'alpha' }
       };
     } else if (parsed.pathname === '/api/token/') {
+      if (options.headers && options.headers.Authorization === 'Bearer sk-current-token') {
+        return {
+          ok: false,
+          status: 200,
+          text: async () => JSON.stringify({ success: false, message: 'invalid access token' })
+        };
+      }
       payload = {
         success: true,
         data: {
@@ -69,6 +85,19 @@ async function run() {
           page_size: 100
         }
       };
+    } else if (parsed.pathname === '/api/usage/token/') {
+      payload = {
+        code: true,
+        message: 'ok',
+        data: {
+          object: 'token_usage',
+          name: 'current',
+          total_granted: 15,
+          total_used: 6,
+          total_available: 9,
+          unlimited_quota: false
+        }
+      };
     } else {
       return {
         ok: false,
@@ -83,10 +112,12 @@ async function run() {
       text: async () => JSON.stringify(payload)
     };
   };
+  };
 
   assert.equal(normalizeNewApiBase('https://example.com'), 'https://example.com/api');
   assert.equal(normalizeNewApiBase('https://example.com/api/v1'), 'https://example.com/api');
 
+  installFetch();
   const result = await querySite({
     id: 'n1',
     provider: 'newapi',
@@ -105,6 +136,36 @@ async function run() {
   assert.equal(result.keyRows[0].groupName, 'alpha');
   assert.equal(calls.some((call) => call.path === '/api/token/' && call.auth === 'Bearer TOKEN'), true);
   assert.equal(calls.some((call) => call.newApiUser === '77'), true);
+
+  installFetch();
+  const relayTokenResult = await querySite({
+    id: 'n2',
+    provider: 'newapi',
+    name: 'New API Key Demo',
+    baseUrl: 'https://example.com',
+    authToken: 'sk-current-token'
+  });
+
+  assert.equal(relayTokenResult.provider, 'newapi');
+  assert.equal(relayTokenResult.groups.length, 0);
+  assert.equal(relayTokenResult.keyRows.length, 1);
+  assert.equal(relayTokenResult.keyRows[0].keyName, 'current');
+  assert.equal(relayTokenResult.keyRows[0].quota, 15);
+  assert.equal(relayTokenResult.keyRows[0].quotaUsed, 6);
+  assert.equal(relayTokenResult.groupFetchFallbacks.some((item) => item.code === 'NEW_API_PRICING_AUTH_REQUIRED'), true);
+  assert.equal(calls.some((call) => call.path === '/api/token/'), false);
+  assert.equal(calls.some((call) => call.path === '/api/usage/token/' && call.auth === 'Bearer sk-current-token'), true);
+
+  await assert.rejects(
+    () => querySite({
+      id: 'n3',
+      provider: 'newapi',
+      name: 'Missing User ID',
+      baseUrl: 'https://example.com',
+      authToken: 'ACCESS_TOKEN_WITHOUT_USER_ID'
+    }),
+    (error) => error && error.code === 'NEW_API_USER_ID_REQUIRED'
+  );
 
   console.log('newapi client check passed');
 }

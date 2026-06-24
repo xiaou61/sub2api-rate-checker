@@ -108,6 +108,17 @@ function unwrapNewApiEnvelope(payload, status, keepEnvelope = false) {
 
     return keepEnvelope ? payload : payload.data;
   }
+  if (payload && typeof payload === 'object' && typeof payload.code === 'boolean') {
+    if (!payload.code) {
+      throw new Sub2ApiError(payload.message || 'New API request failed', {
+        status,
+        code: 'NEW_API_ERROR',
+        metadata: payload
+      });
+    }
+
+    return keepEnvelope ? payload : payload.data;
+  }
 
   return payload;
 }
@@ -549,10 +560,21 @@ function buildMonitorRows(site, monitors, monitorDetails) {
 async function resolveNewApiToken(apiBase, site) {
   const updated = {};
   if (site.authToken) {
-    return { token: site.authToken, updated };
+    const token = String(site.authToken || '').trim();
+    if (token && !isNewApiRelayToken(token) && !site.newApiUserId) {
+      throw new Sub2ApiError('New API AccessToken requires New API User ID; use browser login capture again or fill it manually.', {
+        code: 'NEW_API_USER_ID_REQUIRED',
+        needsToken: true
+      });
+    }
+    return { token, updated };
   }
 
   return { token: '', updated };
+}
+
+function isNewApiRelayToken(token) {
+  return String(token || '').trim().toLowerCase().startsWith('sk-');
 }
 
 function newApiRequestOptions(site, token, extra = {}) {
@@ -565,11 +587,32 @@ function newApiRequestOptions(site, token, extra = {}) {
 }
 
 async function getNewApiPricing(apiBase, site, token) {
+  const useUserAuth = token && !isNewApiRelayToken(token) && site.newApiUserId;
   try {
-    return await requestJson(apiBase, '/pricing', newApiRequestOptions(site, token, { keepEnvelope: true }));
+    return await requestJson(
+      apiBase,
+      '/pricing',
+      useUserAuth
+        ? newApiRequestOptions(site, token, { keepEnvelope: true })
+        : { envelope: 'newapi', keepEnvelope: true }
+    );
   } catch (error) {
-    if (token && error instanceof Sub2ApiError && error.status === 401) {
-      return requestJson(apiBase, '/pricing', { envelope: 'newapi', keepEnvelope: true });
+    if (error instanceof Sub2ApiError && error.code !== 'NETWORK_ERROR' && error.code !== 'NON_JSON_RESPONSE') {
+      return {
+        success: true,
+        data: [],
+        group_ratio: {},
+        usable_group: {},
+        pricingAuthError: serializeError(new Sub2ApiError(
+          'New API pricing requires login; capture AccessToken with New API User ID to load group rates.',
+          {
+            status: error.status,
+            code: 'NEW_API_PRICING_AUTH_REQUIRED',
+            needsToken: true,
+            metadata: error.metadata
+          }
+        ))
+      };
     }
     throw error;
   }
@@ -578,7 +621,7 @@ async function getNewApiPricing(apiBase, site, token) {
 async function getNewApiGroupDirectory(apiBase, site, token) {
   const fallbacks = [];
 
-  if (token) {
+  if (token && !isNewApiRelayToken(token) && site.newApiUserId) {
     try {
       const groups = await requestJson(apiBase, '/user/self/groups', newApiRequestOptions(site, token));
       if (groups && typeof groups === 'object') {
@@ -602,7 +645,7 @@ async function getNewApiGroupDirectory(apiBase, site, token) {
 }
 
 async function getNewApiProfile(apiBase, site, token) {
-  if (!token) {
+  if (!token || isNewApiRelayToken(token)) {
     return null;
   }
 
@@ -614,7 +657,7 @@ async function getNewApiProfile(apiBase, site, token) {
 }
 
 async function listNewApiTokens(apiBase, site, token) {
-  if (!token) {
+  if (!token || isNewApiRelayToken(token)) {
     return [];
   }
 
@@ -648,6 +691,18 @@ async function listNewApiTokens(apiBase, site, token) {
   } while (page <= 50);
 
   return all;
+}
+
+async function getNewApiTokenUsage(apiBase, site, token) {
+  if (!token || !isNewApiRelayToken(token)) {
+    return null;
+  }
+
+  try {
+    return await requestJson(apiBase, '/usage/token/', newApiRequestOptions(site, token));
+  } catch {
+    return null;
+  }
 }
 
 function pricingGroupDescription(pricing, groupName) {
@@ -837,6 +892,56 @@ function buildNewApiRows(site, tokens, groups, profile) {
   });
 }
 
+function buildNewApiUsageRow(site, usage, groups, token) {
+  if (!usage || typeof usage !== 'object') {
+    return null;
+  }
+
+  const groupName = groupNameFromNewApiValue(firstValue(
+    usage.group,
+    usage.group_name,
+    usage.groupName,
+    usage.token_group,
+    usage.tokenGroup
+  ));
+  const group = groupName
+    ? groups.find((item) => normalizeText(item.id) === normalizeText(groupName) || normalizeText(item.name) === normalizeText(groupName))
+    : groups.length === 1
+      ? groups[0]
+      : null;
+  const rate = group ? toPositiveNumber(group.rate_multiplier) : null;
+  const totalGranted = toFiniteNumber(firstValue(usage.total_granted, usage.totalGranted, usage.quota, usage.total_quota));
+  const totalAvailable = toFiniteNumber(firstValue(usage.total_available, usage.totalAvailable, usage.remain_quota, usage.remainQuota));
+  const totalUsed = toFiniteNumber(firstValue(usage.total_used, usage.totalUsed, usage.used_quota, usage.usedQuota));
+  const quota = usage.unlimited_quota || usage.unlimitedQuota
+    ? null
+    : totalGranted !== null
+      ? totalGranted
+      : totalAvailable !== null && totalUsed !== null
+        ? totalAvailable + totalUsed
+        : null;
+
+  return {
+    siteId: site.id,
+    siteName: site.name || site.baseUrl,
+    baseUrl: site.baseUrl,
+    keyId: firstValue(usage.id, usage.token_id, usage.tokenId) || 'current',
+    keyName: firstValue(usage.name, usage.token_name, usage.tokenName) || '当前 API Key',
+    keyMasked: maskKey(token),
+    keyStatus: normalizeNewApiStatus(firstValue(usage.status, usage.enabled, 'active')),
+    groupId: group ? group.id : groupName || null,
+    groupName: group ? group.name : groupName,
+    platform: 'new-api',
+    defaultRate: rate,
+    customRate: null,
+    effectiveRate: rate,
+    quota,
+    quotaUsed: totalUsed,
+    expiresAt: toIsoDate(firstValue(usage.expires_at, usage.expiresAt)),
+    lastUsedAt: ''
+  };
+}
+
 async function queryNewApiSite(inputSite) {
   const site = { ...inputSite, provider: 'newapi' };
   const apiBase = normalizeNewApiBase(site.baseUrl);
@@ -852,13 +957,29 @@ async function queryNewApiSite(inputSite) {
     getNewApiProfile(apiBase, site, token)
   ]);
   fallbacks.push(...(groupDirectory.fallbacks || []));
+  if (pricing && pricing.pricingAuthError) {
+    fallbacks.push(pricing.pricingAuthError);
+  }
 
   let keys = [];
+  let tokenUsage = null;
   if (token) {
-    try {
-      keys = await listNewApiTokens(apiBase, site, token);
-    } catch (error) {
-      fallbacks.push(serializeError(error));
+    if (isNewApiRelayToken(token)) {
+      tokenUsage = await getNewApiTokenUsage(apiBase, site, token);
+      if (!tokenUsage) {
+        fallbacks.push({
+          name: 'Sub2ApiError',
+          message: 'New API API Key can only query pricing; use AccessToken and New API User ID to list all tokens.',
+          status: 0,
+          code: 'NEW_API_RELAY_TOKEN_LIMITED'
+        });
+      }
+    } else {
+      try {
+        keys = await listNewApiTokens(apiBase, site, token);
+      } catch (error) {
+        fallbacks.push(serializeError(error));
+      }
     }
   }
 
@@ -866,7 +987,8 @@ async function queryNewApiSite(inputSite) {
   const rateMap = Object.fromEntries(
     normalizedGroups.map((group) => [group.id, group.rate_multiplier])
   );
-  const keyRows = buildNewApiRows(site, keys, normalizedGroups, profile);
+  const usageRow = buildNewApiUsageRow(site, tokenUsage, normalizedGroups, token);
+  const keyRows = usageRow ? [usageRow] : buildNewApiRows(site, keys, normalizedGroups, profile);
 
   return {
     siteId: site.id,
