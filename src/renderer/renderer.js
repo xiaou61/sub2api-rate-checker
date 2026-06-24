@@ -13,7 +13,8 @@ const state = {
   results: [],
   groupFilter: 'all',
   groupSearch: '',
-  groupDropdownOpen: false
+  groupDropdownOpen: false,
+  selectedComparisonKey: ''
 };
 
 const elements = {
@@ -58,6 +59,7 @@ const elements = {
   groupDropdownMeta: byId('groupDropdownMeta'),
   bestOffer: byId('bestOffer'),
   comparisonRows: byId('comparisonRows'),
+  comparisonOffers: byId('comparisonOffers'),
   comparisonCount: byId('comparisonCount'),
   siteCount: byId('siteCount'),
   selectedSiteTitle: byId('selectedSiteTitle'),
@@ -154,6 +156,7 @@ function clearForm() {
   state.selectedId = '';
   state.groupFilter = 'all';
   state.groupSearch = '';
+  state.selectedComparisonKey = '';
   if (elements.groupSearch) {
     elements.groupSearch.value = '';
   }
@@ -173,6 +176,7 @@ function fillForm(site) {
   state.selectedId = site.id;
   state.groupFilter = 'all';
   state.groupSearch = '';
+  state.selectedComparisonKey = '';
   if (elements.groupSearch) {
     elements.groupSearch.value = '';
   }
@@ -846,24 +850,88 @@ function buildComparisonEntries() {
   return entries;
 }
 
-function buildBestComparisonRows(entries) {
-  const groups = new Map();
+function comparisonGroupKey(groupName, platform) {
+  return groupSignature(groupName, platform || '-');
+}
+
+function compareOffers(a, b) {
+  if (a.rate !== b.rate) {
+    return a.rate - b.rate;
+  }
+  const siteCompare = String(a.siteName || '').localeCompare(String(b.siteName || ''), 'zh-Hans-CN');
+  if (siteCompare !== 0) {
+    return siteCompare;
+  }
+  return String(a.baseUrl || '').localeCompare(String(b.baseUrl || ''), 'zh-Hans-CN');
+}
+
+function buildPriceComparisonGroups(entries) {
+  const grouped = new Map();
   for (const entry of entries) {
-    const key = groupSignature(entry.groupName, entry.platform);
-    const list = groups.get(key) || [];
-    list.push(entry);
-    groups.set(key, list);
+    const key = comparisonGroupKey(entry.groupName, entry.platform);
+    const group = grouped.get(key) || {
+      key,
+      groupName: entry.groupName,
+      platform: entry.platform || '-',
+      allOffers: []
+    };
+    group.allOffers.push(entry);
+    grouped.set(key, group);
   }
 
-  return [...groups.values()]
-    .map((items) => {
-      items.sort((a, b) => a.rate - b.rate || a.siteName.localeCompare(b.siteName, 'zh-Hans-CN'));
+  return [...grouped.values()]
+    .map((group) => {
+      const allOffers = group.allOffers.slice().sort(compareOffers);
+      const bestRate = allOffers.length ? allOffers[0].rate : null;
+      const bestSites = allOffers.filter((offer) => offer.rate === bestRate);
+      const runnerUp = allOffers.find((offer) => offer.rate !== bestRate) || null;
+      const runnerUpRate = runnerUp ? runnerUp.rate : null;
       return {
-        ...items[0],
-        candidates: items.length
+        ...group,
+        allOffers,
+        bestRate,
+        bestSites,
+        runnerUpRate,
+        deltaToRunnerUp: runnerUpRate === null || bestRate === null ? null : runnerUpRate - bestRate,
+        offerCount: allOffers.length
       };
     })
-    .sort((a, b) => a.rate - b.rate || a.groupName.localeCompare(b.groupName, 'zh-Hans-CN'));
+    .filter((group) => toPositiveRate(group.bestRate) !== null && formatRateValue(group.bestRate))
+    .sort((a, b) => {
+      if (a.bestRate !== b.bestRate) {
+        return a.bestRate - b.bestRate;
+      }
+      if (a.bestSites.length !== b.bestSites.length) {
+        return b.bestSites.length - a.bestSites.length;
+      }
+      return String(a.groupName || '').localeCompare(String(b.groupName || ''), 'zh-Hans-CN');
+    });
+}
+
+function selectedComparisonGroup(groups) {
+  if (groups.length === 0) {
+    return null;
+  }
+  const selected = groups.find((group) => group.key === state.selectedComparisonKey);
+  return selected || groups[0];
+}
+
+function offerSitesText(offers, limit = 3) {
+  const urls = offers.map((offer) => offer.baseUrl || offer.siteName).filter(Boolean);
+  const visible = urls.slice(0, limit).join(' / ');
+  const extra = urls.length > limit ? ` / +${urls.length - limit}` : '';
+  return `${visible}${extra}`;
+}
+
+function runnerUpText(group) {
+  if (!group || group.offerCount <= 1) {
+    return '仅 1 家报价';
+  }
+  if (group.runnerUpRate === null) {
+    return '无次优报价';
+  }
+  const delta = group.deltaToRunnerUp === null ? '' : ` · 差 x${formatRateValue(group.deltaToRunnerUp)}`;
+  return `次优 x${formatRateValue(group.runnerUpRate)}${delta}`;
 }
 
 function renderComparison() {
@@ -872,68 +940,115 @@ function renderComparison() {
   }
 
   const entries = buildComparisonEntries().filter((entry) => toPositiveRate(entry.rate) !== null && formatRateValue(entry.rate));
-  const bestRows = buildBestComparisonRows(entries).filter((row) => toPositiveRate(row.rate) !== null && formatRateValue(row.rate));
+  const groups = buildPriceComparisonGroups(entries);
   if (elements.comparisonCount) {
-    elements.comparisonCount.textContent = String(bestRows.length);
+    elements.comparisonCount.textContent = String(groups.length);
   }
 
   if (successfulResults().length === 0) {
     elements.bestOffer.innerHTML = '<div class="empty-state compact"><strong>暂无比价数据</strong><span>查询全部后会汇总每个站点的分组倍率。</span></div>';
     elements.comparisonRows.innerHTML = '';
+    if (elements.comparisonOffers) {
+      elements.comparisonOffers.innerHTML = '';
+    }
     return;
   }
 
-  if (bestRows.length === 0) {
-    elements.bestOffer.innerHTML = '<div class="empty-state compact"><strong>暂无可比较倍率</strong><span>当前分组没有拿到有效倍率。</span></div>';
+  if (groups.length === 0) {
+    elements.bestOffer.innerHTML = '<div class="empty-state compact"><strong>没有拿到有效倍率</strong><span>检查 Token 或站点分组接口。</span></div>';
     elements.comparisonRows.innerHTML = '';
+    if (elements.comparisonOffers) {
+      elements.comparisonOffers.innerHTML = '';
+    }
     return;
   }
 
-  const cheapest = entries.find((entry) => toPositiveRate(entry.rate) !== null && formatRateValue(entry.rate));
-  if (!cheapest) {
-    elements.bestOffer.innerHTML = '<div class="empty-state compact"><strong>暂无可比较倍率</strong><span>当前分组没有拿到有效倍率。</span></div>';
-    elements.comparisonRows.innerHTML = '';
-    return;
-  }
+  const selectedGroup = selectedComparisonGroup(groups);
+  state.selectedComparisonKey = selectedGroup.key;
+  const bestLabel = selectedGroup.bestSites.length > 1
+    ? `并列最低 · ${selectedGroup.bestSites.length} 个站点`
+    : '当前最低';
+  const bestSite = selectedGroup.bestSites[0];
   elements.bestOffer.innerHTML = `
-    <button class="best-offer-card" type="button" data-site-id="${escapeHtml(cheapest.siteId)}" data-group-name="${escapeHtml(cheapest.groupName)}" data-platform="${escapeHtml(cheapest.platform)}">
-      <span class="best-kicker">当前最低</span>
-      <strong>${escapeHtml(cheapest.groupName)}</strong>
-      <span class="best-rate">x${escapeHtml(formatRateValue(cheapest.rate))}</span>
-      <span class="best-site">${escapeHtml(cheapest.siteName)} · ${escapeHtml(cheapest.baseUrl)}</span>
+    <button class="best-offer-card" type="button" data-comparison-key="${escapeHtml(selectedGroup.key)}" data-site-id="${escapeHtml(bestSite.siteId)}" data-group-name="${escapeHtml(selectedGroup.groupName)}" data-platform="${escapeHtml(selectedGroup.platform)}">
+      <span class="best-kicker">${escapeHtml(bestLabel)}</span>
+      <strong>${escapeHtml(selectedGroup.groupName)}</strong>
+      <span class="best-rate">x${escapeHtml(formatRateValue(selectedGroup.bestRate))}</span>
+      <span class="best-site">${escapeHtml(offerSitesText(selectedGroup.bestSites, 4))}</span>
     </button>
   `;
 
-  elements.comparisonRows.innerHTML = bestRows
-    .map((row, index) => `
-      <button class="comparison-row ${index === 0 ? 'winner' : ''}" type="button" data-site-id="${escapeHtml(row.siteId)}" data-group-name="${escapeHtml(row.groupName)}" data-platform="${escapeHtml(row.platform)}">
-        <span class="rank">${index + 1}</span>
-        <span class="comparison-main">
-          <strong>${escapeHtml(row.groupName)}</strong>
-          <span>${escapeHtml(row.platform)} · ${escapeHtml(row.candidates)} 个站点报价</span>
-        </span>
-        <span class="comparison-rate">x${escapeHtml(formatRateValue(row.rate))}</span>
-        <span class="comparison-site">
-          <strong>${escapeHtml(row.siteName)}</strong>
-          <span>${escapeHtml(row.baseUrl)}</span>
-        </span>
-      </button>
-    `)
+  elements.comparisonRows.innerHTML = groups
+    .map((group, index) => {
+      const active = group.key === selectedGroup.key ? ' active' : '';
+      const tieText = group.bestSites.length > 1 ? `并列 ${group.bestSites.length} 家` : '最低 1 家';
+      return `
+        <button class="comparison-row ${index === 0 ? 'winner' : ''}${active}" type="button" aria-pressed="${group.key === selectedGroup.key ? 'true' : 'false'}" data-comparison-key="${escapeHtml(group.key)}" data-site-id="${escapeHtml(group.bestSites[0].siteId)}" data-group-name="${escapeHtml(group.groupName)}" data-platform="${escapeHtml(group.platform)}">
+          <span class="rank">${index + 1}</span>
+          <span class="comparison-main">
+            <strong>${escapeHtml(group.groupName)}</strong>
+            <span>${escapeHtml(group.platform)} · ${escapeHtml(tieText)} · ${escapeHtml(group.offerCount)} 家报价</span>
+          </span>
+          <span class="comparison-rate">
+            <strong>x${escapeHtml(formatRateValue(group.bestRate))}</strong>
+            <small>${escapeHtml(runnerUpText(group))}</small>
+          </span>
+          <span class="comparison-site">
+            <strong>${escapeHtml(offerSitesText(group.bestSites, 2))}</strong>
+            <span>${escapeHtml(group.bestSites.length > 1 ? '全部为并列最低' : '点击查看全部报价')}</span>
+          </span>
+        </button>
+      `;
+    })
     .join('');
 
-  for (const button of document.querySelectorAll('.best-offer-card, .comparison-row')) {
+  if (elements.comparisonOffers) {
+    elements.comparisonOffers.innerHTML = `
+      <div class="offer-panel-head">
+        <span>当前分组报价</span>
+        <strong>${escapeHtml(selectedGroup.groupName)} · x${escapeHtml(formatRateValue(selectedGroup.bestRate))}</strong>
+      </div>
+      <div class="offer-list">
+        ${selectedGroup.allOffers.map((offer) => {
+          const isBest = offer.rate === selectedGroup.bestRate;
+          return `
+            <button class="offer-row${isBest ? ' best' : ''}" type="button" data-site-id="${escapeHtml(offer.siteId)}" data-group-name="${escapeHtml(offer.groupName)}" data-platform="${escapeHtml(offer.platform)}">
+              <span class="offer-site">
+                <strong>${escapeHtml(offer.siteName)}</strong>
+                <small>${escapeHtml(offer.baseUrl)}</small>
+              </span>
+              <span class="offer-rate">x${escapeHtml(formatRateValue(offer.rate))}</span>
+              <span class="offer-badge">${escapeHtml(isBest ? (selectedGroup.bestSites.length > 1 ? '并列最低' : '最低') : '报价')}</span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  for (const button of document.querySelectorAll('.best-offer-card, .comparison-row, .offer-row')) {
     button.addEventListener('click', () => {
+      if (button.dataset.comparisonKey) {
+        selectComparisonTarget(
+          button.dataset.siteId,
+          button.dataset.groupName,
+          button.dataset.platform,
+          button.dataset.comparisonKey
+        );
+        return;
+      }
       selectComparisonTarget(button.dataset.siteId, button.dataset.groupName, button.dataset.platform);
     });
   }
 }
 
-function selectComparisonTarget(siteId, groupName, platform) {
+function selectComparisonTarget(siteId, groupName, platform, comparisonKey = '') {
   const site = state.sites.find((item) => item.id === siteId);
   if (!site) {
     return;
   }
   fillForm(site);
+  state.selectedComparisonKey = comparisonKey || comparisonGroupKey(groupName, platform);
   const result = selectedResult();
   const option = groupOptionsFromResult(result).find((item) => {
     const sameLabel = normalizeText(item.label) === normalizeText(groupName);
@@ -1134,6 +1249,7 @@ async function querySelected() {
   setStatus(`正在查询 ${site.name || site.baseUrl}...`);
   const result = await window.sub2api.querySite(site.id);
   state.results = state.results.filter((item) => item.siteId !== result.siteId).concat(result);
+  state.selectedComparisonKey = '';
   renderResults();
   await loadSites();
   setBusy(false);
@@ -1184,6 +1300,7 @@ async function queryAll() {
   setBusy(true);
   setStatus('正在批量查询...');
   state.results = await window.sub2api.queryAll();
+  state.selectedComparisonKey = '';
   renderResults();
   await loadSites();
   setBusy(false);
@@ -1265,7 +1382,13 @@ const rendererTestHooks = {
   formatRate,
   formatRateValue,
   toFiniteNumber,
-  toPositiveRate
+  toPositiveRate,
+  buildPriceComparisonGroups,
+  renderComparison,
+  renderResults,
+  __setTestState(partial) {
+    Object.assign(state, partial || {});
+  }
 };
 
 if (typeof window !== 'undefined') {

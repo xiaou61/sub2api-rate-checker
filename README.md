@@ -2,7 +2,7 @@
 
 一个给中转站用户用的桌面端倍率比价工具。适合同时维护多个 `sub2api` / `New API` 站点时，批量查询分组倍率、API Key 分组绑定情况，并快速找出哪个站点、哪个分组最便宜。
 
-当前版本：`v0.01`
+当前版本：`v0.02`
 
 ## 功能
 
@@ -10,7 +10,10 @@
 - 添加站点时可选择站点类型：`sub2api` 或 `New API`。
 - 支持批量查询全部站点，也支持只查询当前选中站点。
 - 支持按分组筛选，分组选择体验接近 sub2api 的下拉搜索。
-- 支持全站比价，按有效倍率从低到高排序。
+- 支持全站比价，按分组生成价格排行榜。
+- 支持同价并列最低展示，不会只保留一个赢家。
+- 支持显示次优倍率和与最低倍率的价差。
+- 点击排行榜分组后，会展开该分组所有站点报价，并同步当前站点和分组筛选。
 - 自动过滤无效倍率，避免空值、`0`、`x0` 混进比价结果。
 - 小倍率不会再被四舍五入成 `x0`，例如 `0.00001` 会正常显示。
 - 支持展示 API Key 的分组、状态、默认倍率、专属倍率、最终倍率、配额和最近使用时间。
@@ -58,7 +61,7 @@ New API 站点会调用这些接口：
 
 [Releases](https://github.com/xiaou61/sub2api-rate-checker/releases)
 
-下载后运行 `Sub2API Rate Checker v0.01.exe` 即可。
+下载后运行 `Sub2API Rate Checker v0.02.exe` 即可。
 
 ### 从源码运行
 
@@ -75,6 +78,16 @@ npm start
 4. 填写 Token 或使用「浏览器登录」后再「采集 Token」。
 5. 点击「保存」。
 6. 点击「查询当前」或「查询全部」。
+
+### 怎么看比价结果
+
+1. 点击「查询全部」，工具会汇总站点里所有有效分组倍率。
+2. 「全站比价」顶部会显示当前最便宜机会：分组、最低倍率、最低站点地址。
+3. 中间排行榜按 `最低倍率 -> 并列最低站点数 -> 分组名` 排序。
+4. 如果多个站点同价，会显示「并列最低 · N 个站点」。
+5. 每个分组会显示次优倍率和差价，例如 `次优 x0.45 · 差 x0.05`。
+6. 点击某个分组行，下方会展开该分组所有站点报价，并把并列最低排在最上面。
+7. 右侧/下方的 API Key 和渠道监控是当前站点详情，用来辅助检查分组绑定和可用性。
 
 ## Token 获取说明
 
@@ -128,6 +141,7 @@ src/renderer/renderer.js      前端交互和比价逻辑
 src/renderer/styles.css       UI 样式
 scripts/check-rate-format.js  倍率格式回归检查
 scripts/check-newapi-client.js New API mock 查询检查
+scripts/check-comparison-groups.js 分组比价聚合检查
 scripts/smoke-ui.js           Electron UI 冒烟检查
 ```
 
@@ -136,7 +150,7 @@ scripts/smoke-ui.js           Electron UI 冒烟检查
 生成 portable Windows exe：
 
 ```bash
-npx electron-builder --win portable --publish never --config.directories.output=dist-release-v0.01
+npx electron-builder --win portable --publish never --config.directories.output=dist-release-v0.02
 ```
 
 开发时也可以生成 unpacked 目录：
@@ -153,6 +167,14 @@ npx electron-builder --win dir --publish never --config.directories.output=dist-
 - 这个工具仍然会在本机明文保存站点配置，建议只在自己的电脑使用。
 
 ## 版本记录
+
+### v0.02
+
+- 比价主视图改为分组价格排行榜。
+- 支持多个站点同价时显示为「并列最低」。
+- 新增次优倍率和价差展示，方便判断便宜多少。
+- 点击分组可查看该分组所有站点报价，并同步当前站点/分组筛选。
+- 增加分组比价聚合检查和 UI smoke 回归，防止 `x0` 和并列最低逻辑回退。
 
 ### v0.01
 
