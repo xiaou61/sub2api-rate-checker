@@ -22,7 +22,7 @@
   --warn: #b45309;
   --warn-soft: #fffbeb;
   --scrollbar-track: transparent;
-  --scrollbar-thumb: #8aa6d6;
+  --scrollbar-thumb: #d2def3;
   --scrollbar-thumb-hover: var(--primary);
   --shadow: 0 4px 8px rgba(15, 23, 42, 0.06);
   --radius: 8px;
@@ -160,7 +160,7 @@ select {
 }
 
 button {
-  min-height: 36px;
+  min-height: 45px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--surface);
@@ -305,11 +305,11 @@ h1 {
 }
 
 .muted {
-  max-width: 315px;
+  max-width: 350px;
   margin: 3px 0 0;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.15;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -361,16 +361,14 @@ h1 {
   grid-template-columns: minmax(0, 1fr) 10px minmax(0, 1fr);
   grid-template-rows:
     34px
-    minmax(86px, 94px)
-    minmax(60px, 68px)
-    minmax(0, 1fr)
-    54px;
+    minmax(104px, 112px)
+    minmax(88px, 100px)
+    minmax(0, 1fr);
   grid-template-areas:
     "status status status"
     "compare resize context"
     "compare resize summary"
-    "results resize monitor"
-    "failures failures failures";
+    "results resize monitor";
   gap: 8px 0px;
   overflow: hidden;
 }
@@ -482,8 +480,7 @@ h1 {
 .panel,
 .detail-head,
 .status-bar,
-.summary-strip > div,
-.failure-strip {
+.summary-strip > div {
   min-height: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -734,50 +731,82 @@ label span,
 .comparison-panel {
   grid-area: compare;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: 38px auto minmax(0, 1fr);
 }
 
 .comparison-head {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: minmax(132px, 148px) minmax(120px, 1fr);
-  align-items: stretch;
-  gap: 8px;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
   padding: 8px 10px;
 }
 
-.best-offer {
+.best-offer,
+.filter-offer {
   min-width: 0;
+  min-height: 0;
   display: flex;
 }
 
-.best-offer > * {
-  width: 100%;
+.best-offer {
+  grid-area: auto;
 }
 
-.best-offer-card {
+.filter-offer {
+  grid-area: auto;
+}
+
+.best-offer > *,
+.filter-offer > * {
   width: 100%;
-  min-height: 108px;
+  height: 100%;
+}
+
+.best-offer-card,
+.filter-offer-card {
+  width: 100%;
+  min-height: 86px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   border: 1px solid #99f6e4;
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   background: var(--teal-soft);
   color: var(--text);
   text-align: left;
 }
 
-.best-kicker {
+.filter-offer-card {
+  border-color: #bfdbfe;
+  background: var(--surface-strong);
+}
+
+.filter-offer-card.all-mode,
+.filter-offer-card.muted-mode {
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+.best-kicker,
+.filter-kicker {
   color: var(--teal);
   font-size: 11px;
   font-weight: 800;
 }
 
-.best-offer-card strong {
+.filter-kicker {
+  color: var(--primary);
+}
+
+.filter-offer-card.muted-mode .filter-kicker {
+  color: var(--muted-strong);
+}
+
+.best-offer-card strong,
+.filter-offer-card strong {
   min-width: 0;
   color: var(--text-strong);
   font-size: 14px;
@@ -787,15 +816,26 @@ label span,
   white-space: nowrap;
 }
 
-.best-rate {
+.best-rate,
+.filter-rate {
   color: var(--teal);
   font-family: var(--mono);
-  font-size: 30px;
+  font-size: 24px;
   line-height: 1;
   font-weight: 800;
 }
 
-.best-site {
+.filter-rate {
+  color: var(--primary);
+  font-size: 22px;
+}
+
+.filter-offer-card.muted-mode .filter-rate {
+  color: var(--muted-strong);
+}
+
+.best-site,
+.filter-offer-card small {
   display: block;
   width: 100%;
   min-width: 0;
@@ -809,11 +849,16 @@ label span,
 .group-picker {
   position: relative;
   z-index: 25;
+  width: 100%;
   min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
   border: 1px solid var(--line-soft);
   border-radius: 7px;
   background: #ffffff;
-  padding: 8px;
+  padding: 6px;
 }
 
 .picker-label {
@@ -821,15 +866,21 @@ label span,
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 6px;
+  margin-bottom: 0;
   color: var(--muted-strong);
   font-size: 11px;
   font-weight: 800;
 }
 
+.group-picker .picker-label {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
 .picker-label span:last-child {
   min-width: 28px;
-  height: 22px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -842,12 +893,12 @@ label span,
 
 .group-select-button {
   width: 100%;
-  min-height: 64px;
+  min-height: 36px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 5px 10px;
   text-align: left;
   background: var(--surface);
 }
@@ -1031,9 +1082,9 @@ label span,
 }
 
 .comparison-rows {
-  flex: 1 1 auto;
   min-height: 0;
   display: grid;
+  align-content: start;
   gap: 5px;
   overflow: auto;
   padding: 0 10px 10px;
@@ -1042,14 +1093,13 @@ label span,
 
 .comparison-row {
   width: 100%;
-  min-height: 0;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto minmax(120px, 0.7fr);
+  grid-template-columns: 28px minmax(0, 1fr) auto minmax(100px, 0.7fr);
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   border: 1px solid var(--line-soft);
   border-radius: 7px;
-  padding: 7px 8px;
+  padding: 5px 8px;
   background: var(--surface);
   text-align: left;
 }
@@ -1061,7 +1111,7 @@ label span,
 
 .rank {
   width: 28px;
-  height: 22px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1084,6 +1134,7 @@ label span,
 .comparison-main strong,
 .comparison-site strong {
   color: var(--text-strong);
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1098,6 +1149,26 @@ label span,
   white-space: nowrap;
 }
 
+.comparison-main .comparison-meta-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.comparison-meta-line > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comparison-offer-count {
+  flex: 0 0 auto;
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 900;
+}
+
 .comparison-rate {
   color: var(--teal);
   font-family: var(--mono);
@@ -1109,16 +1180,27 @@ label span,
 .detail-head {
   grid-area: context;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 5px;
-  padding: 8px 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 8px;
+  padding: 8px 10px;
   overflow: hidden;
+}
+
+.detail-head > .best-offer,
+.detail-head > .filter-offer {
+  align-self: stretch;
 }
 
 .detail-main {
   min-width: 0;
+}
+
+.detail-main[hidden],
+.detail-source[hidden] {
+  display: none;
 }
 
 .eyebrow {
@@ -1317,6 +1399,11 @@ tbody tr:hover {
   color: var(--ok);
 }
 
+.pill.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
 .pill.bad {
   background: var(--danger-soft);
   color: var(--danger);
@@ -1373,70 +1460,6 @@ td.empty-row {
 .empty-state.danger strong,
 .empty-state.danger span {
   color: var(--danger);
-}
-
-.failures-panel {
-  grid-area: failures;
-  min-height: 0;
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  overflow: hidden;
-  border-color: #fecaca;
-  background: var(--danger-soft);
-}
-
-.failures-panel .panel-title {
-  flex: 0 0 74px;
-  min-height: 0;
-  justify-content: center;
-  border-right: 1px solid #fecaca;
-  border-bottom: 0;
-  background: transparent;
-  color: var(--danger);
-}
-
-#failures {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-  scrollbar-gutter: stable;
-}
-
-#failures > .empty-row {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  color: var(--danger);
-}
-
-.failure-item {
-  min-height: 52px;
-  padding: 8px 12px;
-  display: grid;
-  grid-template-columns: minmax(120px, 170px) minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-}
-
-.failure-item + .failure-item {
-  border-top: 1px solid #fecaca;
-}
-
-.failure-item strong {
-  color: var(--danger);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.failure-message {
-  color: var(--danger);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 @media (max-width: 980px) {
@@ -1536,10 +1559,6 @@ td.empty-row {
   .results-panel,
   .monitor-panel {
     min-height: 320px;
-  }
-
-  .failures-panel {
-    min-height: 96px;
   }
 
   .group-menu {

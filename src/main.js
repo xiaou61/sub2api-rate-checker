@@ -15,8 +15,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 750,
-    minWidth: 900,
-    minHeight: 600,
+    minWidth: 1000,
+    minHeight: 650,
     useContentSize: true,
     title: 'Sub2API Rate Checker',
     webPreferences: {

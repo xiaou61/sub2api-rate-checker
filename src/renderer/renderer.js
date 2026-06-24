@@ -41,7 +41,6 @@ const elements = {
   queryAllBtn: byId('queryAllBtn'),
   statusBar: byId('statusBar'),
   resultRows: byId('resultRows'),
-  failures: byId('failures'),
   summarySites: byId('summarySites'),
   summarySuccess: byId('summarySuccess'),
   summaryFailed: byId('summaryFailed'),
@@ -58,8 +57,8 @@ const elements = {
   groupDropdownValue: byId('groupDropdownValue'),
   groupDropdownMeta: byId('groupDropdownMeta'),
   bestOffer: byId('bestOffer'),
+  filterOffer: byId('filterOffer'),
   comparisonRows: byId('comparisonRows'),
-  comparisonOffers: byId('comparisonOffers'),
   comparisonCount: byId('comparisonCount'),
   siteCount: byId('siteCount'),
   selectedSiteTitle: byId('selectedSiteTitle'),
@@ -72,6 +71,18 @@ function setStatus(message, type = '') {
   }
   elements.statusBar.innerHTML = `<span class="status-message">${escapeHtml(message)}</span>`;
   elements.statusBar.className = `status-bar ${type}`.trim();
+}
+
+function setFailureStatusFromResults() {
+  const failures = state.results.filter((result) => result && !result.ok);
+  if (failures.length === 0) {
+    return;
+  }
+  const firstError = failures.find((result) => result.error && result.error.message);
+  const message = firstError && firstError.error && firstError.error.message
+    ? `查询完成，${failures.length} 个站点失败：${firstError.error.message}`
+    : `查询完成，${failures.length} 个站点失败`;
+  setStatus(message, 'bad');
 }
 
 function escapeHtml(value) {
@@ -152,11 +163,15 @@ function statusClassForValue(value) {
     'normal',
     'ok',
     'online',
+    'operational',
     'pass',
     'passed',
     'success',
     'succeeded',
     'up'
+  ]);
+  const warnStatuses = new Set([
+    'degraded'
   ]);
   const badStatuses = new Set([
     'blocked',
@@ -173,6 +188,9 @@ function statusClassForValue(value) {
   ]);
   if (okStatuses.has(status)) {
     return 'ok';
+  }
+  if (warnStatuses.has(status)) {
+    return 'warn';
   }
   if (badStatuses.has(status)) {
     return 'bad';
@@ -1099,21 +1117,97 @@ function globalComparisonGroups() {
 }
 
 function offerSitesText(offers, limit = 3) {
-  const urls = offers.map((offer) => offer.baseUrl || offer.siteName).filter(Boolean);
-  const visible = urls.slice(0, limit).join(' / ');
-  const extra = urls.length > limit ? ` / +${urls.length - limit}` : '';
+  const names = offers.map((offer) => offer.siteName || offer.baseUrl).filter(Boolean);
+  const visible = names.slice(0, limit).join(' / ');
+  const extra = names.length > limit ? ` / +${names.length - limit}` : '';
   return `${visible}${extra}`;
 }
 
 function runnerUpText(group) {
   if (!group || group.offerCount <= 1) {
-    return '仅 1 家报价';
+    return '';
   }
   if (group.runnerUpRate === null) {
     return '无次优报价';
   }
   const delta = group.deltaToRunnerUp === null ? '' : ` · 差 x${formatRateValue(group.deltaToRunnerUp)}`;
   return `次优 x${formatRateValue(group.runnerUpRate)}${delta}`;
+}
+
+function renderGlobalBestOffer(group) {
+  if (!elements.bestOffer) {
+    return;
+  }
+  if (!group) {
+    elements.bestOffer.innerHTML = '<div class="empty-state compact"><strong>没有拿到有效倍率</strong><span>检查 Token 或站点分组接口。</span></div>';
+    return;
+  }
+
+  const bestLabel = group.bestSites.length > 1
+    ? `全局最低 · 并列 ${group.bestSites.length} 站`
+    : '全局最低';
+  const bestSite = group.bestSites[0];
+  elements.bestOffer.innerHTML = `
+    <button class="best-offer-card" type="button" data-comparison-key="${escapeHtml(group.key)}" data-site-id="${escapeHtml(bestSite.siteId)}" data-group-name="${escapeHtml(group.groupName)}" data-platform="${escapeHtml(group.platform)}">
+      <span class="best-kicker">${escapeHtml(bestLabel)}</span>
+      <strong>${escapeHtml(group.groupName)}</strong>
+      <span class="best-rate">x${escapeHtml(formatRateValue(group.bestRate))}</span>
+      <span class="best-site">${escapeHtml(offerSitesText(group.bestSites, 4))}</span>
+    </button>
+  `;
+}
+
+function renderFilterOffer(selectedGroup, groups) {
+  if (!elements.filterOffer) {
+    return;
+  }
+
+  if (state.groupFilter === 'all') {
+    elements.filterOffer.innerHTML = `
+      <div class="filter-offer-card all-mode">
+        <span class="filter-kicker">当前筛选结果</span>
+        <strong>全部模式</strong>
+        <span class="filter-rate">${escapeHtml(String(groups.length))} 个分组</span>
+        <small>下方展示所有分组的最低排行</small>
+      </div>
+    `;
+    return;
+  }
+
+  if (state.groupFilter === 'ungrouped') {
+    elements.filterOffer.innerHTML = `
+      <div class="filter-offer-card muted-mode">
+        <span class="filter-kicker">当前筛选结果</span>
+        <strong>未绑定</strong>
+        <span class="filter-rate">无倍率</span>
+        <small>未绑定 Key / 监控不参与倍率比价</small>
+      </div>
+    `;
+    return;
+  }
+
+  if (!selectedGroup) {
+    elements.filterOffer.innerHTML = `
+      <div class="filter-offer-card muted-mode">
+        <span class="filter-kicker">当前筛选结果</span>
+        <strong>无报价</strong>
+        <span class="filter-rate">-</span>
+        <small>当前分组没有可用倍率</small>
+      </div>
+    `;
+    return;
+  }
+
+  const bestSite = selectedGroup.bestSites[0];
+  const tied = selectedGroup.bestSites.length > 1 ? ` · 并列 ${selectedGroup.bestSites.length} 站` : '';
+  elements.filterOffer.innerHTML = `
+    <button class="filter-offer-card" type="button" data-comparison-key="${escapeHtml(selectedGroup.key)}" data-site-id="${escapeHtml(bestSite.siteId)}" data-group-name="${escapeHtml(selectedGroup.groupName)}" data-platform="${escapeHtml(selectedGroup.platform)}">
+      <span class="filter-kicker">当前分组最低${escapeHtml(tied)}</span>
+      <strong>${escapeHtml(selectedGroup.groupName)}</strong>
+      <span class="filter-rate">x${escapeHtml(formatRateValue(selectedGroup.bestRate))}</span>
+      <small>${escapeHtml(offerSitesText(selectedGroup.bestSites, 3))}</small>
+    </button>
+  `;
 }
 
 function renderComparison() {
@@ -1129,61 +1223,53 @@ function renderComparison() {
 
   if (successfulResults().length === 0) {
     elements.bestOffer.innerHTML = '<div class="empty-state compact"><strong>暂无比价数据</strong><span>查询全部后会汇总每个站点的分组倍率。</span></div>';
-    elements.comparisonRows.innerHTML = '';
-    if (elements.comparisonOffers) {
-      elements.comparisonOffers.innerHTML = '';
+    if (elements.filterOffer) {
+      elements.filterOffer.innerHTML = '<div class="empty-state compact"><strong>暂无筛选结果</strong><span>查询后显示当前分组最低。</span></div>';
     }
+    elements.comparisonRows.innerHTML = '';
     return;
   }
 
   if (allGroups.length === 0) {
     elements.bestOffer.innerHTML = '<div class="empty-state compact"><strong>没有拿到有效倍率</strong><span>检查 Token 或站点分组接口。</span></div>';
-    elements.comparisonRows.innerHTML = '';
-    if (elements.comparisonOffers) {
-      elements.comparisonOffers.innerHTML = '';
+    if (elements.filterOffer) {
+      elements.filterOffer.innerHTML = '<div class="empty-state compact"><strong>没有筛选报价</strong><span>当前没有可用于比价的分组。</span></div>';
     }
+    elements.comparisonRows.innerHTML = '';
     return;
   }
 
   const globalBestGroup = allGroups[0];
-  const bestLabel = globalBestGroup.bestSites.length > 1
-    ? `并列最低 · ${globalBestGroup.bestSites.length} 个站点`
-    : '当前最低';
-  const bestSite = globalBestGroup.bestSites[0];
-  elements.bestOffer.innerHTML = `
-    <button class="best-offer-card" type="button" data-comparison-key="${escapeHtml(globalBestGroup.key)}" data-site-id="${escapeHtml(bestSite.siteId)}" data-group-name="${escapeHtml(globalBestGroup.groupName)}" data-platform="${escapeHtml(globalBestGroup.platform)}">
-      <span class="best-kicker">${escapeHtml(bestLabel)}</span>
-      <strong>${escapeHtml(globalBestGroup.groupName)}</strong>
-      <span class="best-rate">x${escapeHtml(formatRateValue(globalBestGroup.bestRate))}</span>
-      <span class="best-site">${escapeHtml(offerSitesText(globalBestGroup.bestSites, 4))}</span>
-    </button>
-  `;
+  renderGlobalBestOffer(globalBestGroup);
 
   if (groups.length === 0) {
+    renderFilterOffer(null, groups);
     elements.comparisonRows.innerHTML = '<div class="empty-state compact"><strong>当前筛选无报价</strong><span>切回全部分组查看完整比价。</span></div>';
-    if (elements.comparisonOffers) {
-      elements.comparisonOffers.innerHTML = '';
-    }
     return;
   }
 
   const selectedGroup = selectedComparisonGroup(groups);
   state.selectedComparisonKey = selectedGroup.key;
+  renderFilterOffer(selectedGroup, groups);
 
   elements.comparisonRows.innerHTML = groups
     .map((group, index) => {
       const active = group.key === selectedGroup.key ? ' active' : '';
       const tieText = group.bestSites.length > 1 ? `并列 ${group.bestSites.length} 家` : '最低 1 家';
+      const runnerText = runnerUpText(group);
       return `
         <button class="comparison-row ${index === 0 ? 'winner' : ''}${active}" type="button" aria-pressed="${group.key === selectedGroup.key ? 'true' : 'false'}" data-comparison-key="${escapeHtml(group.key)}" data-site-id="${escapeHtml(group.bestSites[0].siteId)}" data-group-name="${escapeHtml(group.groupName)}" data-platform="${escapeHtml(group.platform)}">
           <span class="rank">${index + 1}</span>
           <span class="comparison-main">
             <strong>${escapeHtml(group.groupName)}</strong>
-            <span>${escapeHtml(group.platform)} · ${escapeHtml(tieText)} · ${escapeHtml(group.offerCount)} 家报价</span>
+            <span class="comparison-meta-line">
+              <span>${escapeHtml(group.platform)} · ${escapeHtml(tieText)}</span>
+              <strong class="comparison-offer-count">${escapeHtml(group.offerCount)} 家报价</strong>
+            </span>
           </span>
           <span class="comparison-rate">
             <strong>x${escapeHtml(formatRateValue(group.bestRate))}</strong>
-            <small>${escapeHtml(runnerUpText(group))}</small>
+            ${runnerText ? `<small>${escapeHtml(runnerText)}</small>` : ''}
           </span>
           <span class="comparison-site">
             <strong>${escapeHtml(offerSitesText(group.bestSites, 2))}</strong>
@@ -1194,31 +1280,7 @@ function renderComparison() {
     })
     .join('');
 
-  if (elements.comparisonOffers) {
-    elements.comparisonOffers.innerHTML = `
-      <div class="offer-panel-head">
-        <span>当前分组报价</span>
-        <strong>${escapeHtml(selectedGroup.groupName)} · x${escapeHtml(formatRateValue(selectedGroup.bestRate))}</strong>
-      </div>
-      <div class="offer-list">
-        ${selectedGroup.allOffers.map((offer) => {
-          const isBest = offer.rate === selectedGroup.bestRate;
-          return `
-            <button class="offer-row${isBest ? ' best' : ''}" type="button" data-site-id="${escapeHtml(offer.siteId)}" data-group-name="${escapeHtml(offer.groupName)}" data-platform="${escapeHtml(offer.platform)}">
-              <span class="offer-site">
-                <strong>${escapeHtml(offer.siteName)}</strong>
-                <small>${escapeHtml(offer.baseUrl)}</small>
-              </span>
-              <span class="offer-rate">x${escapeHtml(formatRateValue(offer.rate))}</span>
-              <span class="offer-badge">${escapeHtml(isBest ? (selectedGroup.bestSites.length > 1 ? '并列最低' : '最低') : '报价')}</span>
-            </button>
-          `;
-        }).join('')}
-      </div>
-    `;
-  }
-
-  for (const button of document.querySelectorAll('.best-offer-card, .comparison-row, .offer-row')) {
+  for (const button of document.querySelectorAll('.best-offer-card, .comparison-row')) {
     button.addEventListener('click', () => {
       if (button.dataset.comparisonKey) {
         selectComparisonTarget(
@@ -1394,25 +1456,7 @@ function renderResults() {
       .join('');
   }
 
-  const failures = visibleResults().filter((result) => !result.ok);
-  if (failures.length === 0) {
-    elements.failures.innerHTML = '<div class="empty-row">暂无失败</div>';
-  } else {
-    elements.failures.innerHTML = failures
-      .map((result) => {
-        const error = result.error || {};
-        const code = error.requires2fa ? '2FA' : error.needsToken ? 'TOKEN' : error.code || '';
-        return `
-          <div class="failure-item">
-            <strong>${escapeHtml(result.siteName)}</strong>
-            <span class="failure-message">${escapeHtml(error.message || '查询失败')}</span>
-            <span class="pill bad">${escapeHtml(code)}</span>
-          </div>
-        `;
-      })
-      .join('');
-  }
-
+  setFailureStatusFromResults();
   renderSummary();
 }
 
@@ -1548,10 +1592,25 @@ function clampNumber(value, min, max) {
 }
 
 const CONTENT_COLUMN_HANDLE_WIDTH = 10;
+let contentColumnSplitRatio = 0.5;
+
+function contentColumnAvailableWidth(contentColumn) {
+  const availableWidth = Math.max(0, contentColumn.offsetWidth - CONTENT_COLUMN_HANDLE_WIDTH);
+  const styles = getComputedStyle(contentColumn);
+  const columnGap = Number.parseFloat(styles.columnGap) || 0;
+  return Math.max(0, availableWidth - columnGap * 2);
+}
 
 function defaultContentColumnLeftWidth(contentColumn) {
-  const availableWidth = Math.max(0, contentColumn.offsetWidth - CONTENT_COLUMN_HANDLE_WIDTH);
-  return Math.round(availableWidth / 2);
+  return Math.round(contentColumnAvailableWidth(contentColumn) * contentColumnSplitRatio);
+}
+
+function rememberContentColumnSplit(contentColumn, leftWidth) {
+  const availableWidth = contentColumnAvailableWidth(contentColumn);
+  if (availableWidth <= 0 || leftWidth === null || leftWidth === undefined) {
+    return;
+  }
+  contentColumnSplitRatio = clampNumber(leftWidth / availableWidth, 0.35, 0.65);
 }
 
 function applySiteColumnWidth(siteColumn, width) {
@@ -1571,11 +1630,8 @@ function applySiteColumnWidth(siteColumn, width) {
 }
 
 function applyContentColumnSplit(contentColumn, leftWidth) {
-  const contentWidth = contentColumn.offsetWidth;
   const handleWidth = CONTENT_COLUMN_HANDLE_WIDTH;
-  const styles = getComputedStyle(contentColumn);
-  const columnGap = Number.parseFloat(styles.columnGap) || 0;
-  const availableWidth = Math.max(0, contentWidth - handleWidth - columnGap * 2);
+  const availableWidth = contentColumnAvailableWidth(contentColumn);
   const minColumnWidth = Math.min(300, Math.max(220, Math.round(availableWidth * 0.35)));
   const maxLeft = availableWidth - minColumnWidth;
   if (maxLeft <= minColumnWidth) {
@@ -1585,7 +1641,15 @@ function applyContentColumnSplit(contentColumn, leftWidth) {
   const nextLeft = clampNumber(leftWidth, minColumnWidth, maxLeft);
   const rightWidth = availableWidth - nextLeft;
   contentColumn.style.gridTemplateColumns = `${nextLeft}px ${handleWidth}px ${rightWidth}px`;
+  rememberContentColumnSplit(contentColumn, nextLeft);
   return nextLeft;
+}
+
+function resyncContentColumnSplit(contentColumn) {
+  if (!contentColumn || !contentColumn.style.gridTemplateColumns) {
+    return;
+  }
+  applyContentColumnSplit(contentColumn, defaultContentColumnLeftWidth(contentColumn));
 }
 
 function resetDragState() {
@@ -1601,15 +1665,23 @@ async function queryAll() {
 
   setBusy(true);
   setStatus('正在批量查询...');
-  state.results = await window.sub2api.queryAll();
-  state.selectedComparisonKey = '';
-  renderResults();
-  await loadSites();
-  setBusy(false);
+  try {
+    state.results = await window.sub2api.queryAll();
+    state.selectedComparisonKey = '';
+    renderResults();
+    await loadSites();
 
-  const failed = state.results.filter((result) => !result.ok).length;
-  const firstError = state.results.find((result) => !result.ok && result.error && result.error.message);
-  setStatus(failed ? `查询完成，${failed} 个站点失败${firstError ? `：${firstError.error.message}` : ''}` : '查询完成', failed ? 'bad' : 'ok');
+    const failed = state.results.filter((result) => !result.ok).length;
+    if (failed) {
+      setFailureStatusFromResults();
+    } else {
+      setStatus('查询完成', 'ok');
+    }
+  } catch (error) {
+    setStatus(error.message || '批量查询失败', 'bad');
+  } finally {
+    setBusy(false);
+  }
 }
 
 function setBusy(isBusy) {
@@ -1674,6 +1746,7 @@ async function init() {
       if (!isResizing) return;
       const diff = e.clientX - startX;
       applySiteColumnWidth(siteColumn, startWidth + diff);
+      resyncContentColumnSplit(contentColumn);
     });
 
     window.addEventListener('mouseup', () => {
@@ -1710,7 +1783,8 @@ async function init() {
     window.addEventListener('mousemove', (e) => {
       if (!isInnerResizing) return;
       const diff = e.clientX - innerStartX;
-      applyContentColumnSplit(contentColumn, innerStartLeftWidth + diff);
+      const nextLeft = applyContentColumnSplit(contentColumn, innerStartLeftWidth + diff);
+      rememberContentColumnSplit(contentColumn, nextLeft);
     });
 
     window.addEventListener('mouseup', () => {
@@ -1724,10 +1798,7 @@ async function init() {
     if (siteColumn && siteColumn.style.flexBasis) {
       applySiteColumnWidth(siteColumn, siteColumn.offsetWidth);
     }
-    if (contentColumn && contentColumn.style.gridTemplateColumns) {
-      const firstColumn = parseInt(contentColumn.style.gridTemplateColumns.split(' ')[0], 10);
-      applyContentColumnSplit(contentColumn, firstColumn || defaultContentColumnLeftWidth(contentColumn));
-    }
+    resyncContentColumnSplit(contentColumn);
     if (state.groupDropdownOpen) {
       positionGroupDropdown();
     }
@@ -1758,7 +1829,11 @@ async function init() {
   }
 
   await loadSites();
-  renderResults();
+  if (state.sites.length > 0) {
+    await queryAll();
+  } else {
+    renderResults();
+  }
 }
 
 const rendererTestHooks = {
@@ -1769,6 +1844,9 @@ const rendererTestHooks = {
   buildPriceComparisonGroups,
   renderComparison,
   renderResults,
+  __getTestState() {
+    return { ...state };
+  },
   __setTestState(partial) {
     Object.assign(state, partial || {});
   }

@@ -237,12 +237,13 @@ async function collectMetrics(win) {
         comparisonPanel: rect('.comparison-panel'),
         comparisonHead: rect('.comparison-head'),
         groupPicker: rect('.group-picker'),
+        bestOffer: rect('#bestOffer'),
+        filterOffer: rect('#filterOffer'),
         groupMenu: rect('.group-menu:not([hidden])'),
         detailHead: rect('.detail-head'),
         summaryStrip: rect('.summary-strip'),
         resultsPanel: rect('.results-panel'),
-        monitorPanel: rect('.monitor-panel'),
-        failuresPanel: rect('.failures-panel')
+        monitorPanel: rect('.monitor-panel')
       };
       const problems = [];
       for (const [name, box] of Object.entries(regions)) {
@@ -258,6 +259,18 @@ async function collectMetrics(win) {
       }
       if (regions.groupPicker && regions.groupPicker.width < 120 && window.innerWidth >= 900) {
         problems.push('group picker too narrow ' + regions.groupPicker.width);
+      }
+      if (regions.comparisonPanel && regions.groupPicker && regions.groupPicker.bottom > regions.comparisonPanel.bottom + 1) {
+        problems.push('group picker clipped by comparison panel');
+      }
+      if (regions.comparisonPanel && regions.comparisonHead && regions.comparisonHead.bottom > regions.comparisonPanel.bottom + 1) {
+        problems.push('comparison head clipped by comparison panel');
+      }
+      if (regions.detailHead && regions.bestOffer && regions.bestOffer.bottom > regions.detailHead.bottom + 1) {
+        problems.push('best offer clipped by detail area');
+      }
+      if (regions.detailHead && regions.filterOffer && regions.filterOffer.bottom > regions.detailHead.bottom + 1) {
+        problems.push('filter offer clipped by detail area');
       }
       if (regions.detailHead && regions.detailHead.width < 200 && window.innerWidth >= 900) {
         problems.push('detail column too narrow ' + regions.detailHead.width);
@@ -313,15 +326,13 @@ async function captureViewport(viewport) {
 
   await win.loadFile(path.join(__dirname, '..', 'src', 'renderer', 'index.html'));
   await waitForSelector(win, '#queryAllBtn');
-  await wait(250);
-  await click(win, '#queryAllBtn');
-  await wait(450);
+  await wait(700);
 
   const closedMetrics = await collectMetrics(win);
   await screenshot(win, path.join(outputDir, `${viewport.name}-closed.png`));
 
-  await drag(win, '#resizeHandle', 1200);
   await drag(win, '#innerResizeHandle', 1200);
+  await drag(win, '#resizeHandle', 1200);
   await wait(100);
   const draggedMetrics = await collectMetrics(win);
   await screenshot(win, path.join(outputDir, `${viewport.name}-dragged.png`));
