@@ -103,6 +103,8 @@
           </section>
         </aside>
 
+        <div class="resize-handle" id="resizeHandle" title="拖动调整宽度"></div>
+
         <section class="content-column">
           <div id="statusBar" class="status-bar" role="status" aria-live="polite">就绪</div>
 
@@ -112,7 +114,6 @@
               <span class="panel-count" id="comparisonCount">0</span>
             </div>
             <div class="comparison-head">
-              <div id="bestOffer" class="best-offer"></div>
               <div class="group-picker">
                 <div class="picker-label">
                   <span id="groupFilterLabel">分组筛选</span>
@@ -135,16 +136,19 @@
               </div>
             </div>
             <div id="comparisonRows" class="comparison-rows"></div>
-            <div id="comparisonOffers" class="comparison-offers"></div>
           </section>
 
+          <div class="inner-resize-handle" id="innerResizeHandle" title="拖动调整列宽"></div>
+
           <section class="detail-head">
-            <div class="detail-main">
+            <div id="bestOffer" class="best-offer"></div>
+            <div id="filterOffer" class="filter-offer"></div>
+            <div class="detail-main" hidden>
               <div class="eyebrow">当前站点</div>
               <h2 id="selectedSiteTitle">请选择站点</h2>
               <p id="selectedSiteMeta">保存或选择一个站点后展示详情。</p>
             </div>
-            <div class="detail-source">
+            <div class="detail-source" hidden>
               <span>分组来源</span>
               <strong id="groupSourceText">未查询</strong>
             </div>
@@ -221,11 +225,6 @@
                 <tbody id="monitorRows"></tbody>
               </table>
             </div>
-          </section>
-
-          <section class="panel failures-panel">
-            <div class="panel-title">失败</div>
-            <div id="failures"></div>
           </section>
         </section>
       </main>
