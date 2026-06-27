@@ -3,7 +3,7 @@
 const path = require('node:path');
 const { app, BrowserWindow, ipcMain } = require('electron');
 const { createStorage } = require('./storage');
-const { normalizeSiteProvider, normalizeWebBase, querySite, serializeError } = require('./sub2apiClient');
+const { normalizeSiteProvider, normalizeWebBase, querySite, speedTestSite, serializeError } = require('./sub2apiClient');
 
 app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar');
 
@@ -53,8 +53,8 @@ function createSuccessResult(site, payload) {
       monitorRows: monitorRows.length,
       rows: rows.length
     },
-    rows,
-    keyRows,
+    rows: sanitizeKeyRows(rows),
+    keyRows: sanitizeKeyRows(keyRows),
     monitorRows,
     groups,
     groupSource: payload.groupSource || '',
@@ -63,6 +63,13 @@ function createSuccessResult(site, payload) {
     monitors,
     monitorDetails
   };
+}
+
+function sanitizeKeyRows(rows) {
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    const { apiKey, real_key, full_key, token, key, value, ...safeRow } = row || {};
+    return safeRow;
+  });
 }
 
 function createErrorResult(site, error) {
@@ -88,6 +95,34 @@ async function queryOne(site) {
     return createSuccessResult(site, payload);
   } catch (error) {
     return createErrorResult(site, error);
+  }
+}
+
+async function speedTestOne(site, options = {}) {
+  try {
+    const payload = await querySite(site);
+    if (payload.updatedTokens && Object.keys(payload.updatedTokens).length > 0) {
+      storage.updateTokens(site.id, payload.updatedTokens);
+    }
+    return await speedTestSite(site, { ...options, payload });
+  } catch (error) {
+    return {
+      ok: false,
+      siteId: site.id,
+      siteName: site.name || site.baseUrl,
+      baseUrl: site.baseUrl,
+      provider: normalizeSiteProvider(site),
+      testedAt: new Date().toISOString(),
+      summary: {
+        total: 0,
+        ok: 0,
+        failed: 0,
+        fastestLatencyMs: null,
+        averageLatencyMs: null
+      },
+      rows: [],
+      error: serializeError(error)
+    };
   }
 }
 
@@ -365,6 +400,20 @@ function openBrowserLogin(site) {
 function registerIpc() {
   ipcMain.handle('sites:list', () => storage.listSites());
 
+  ipcMain.handle('preferences:get', () => storage.getPreferences());
+
+  ipcMain.handle('preferences:save', (_event, preferences) => {
+    return storage.savePreferences(preferences);
+  });
+
+  ipcMain.handle('results:snapshot:get', () => {
+    return storage.getResultSnapshot();
+  });
+
+  ipcMain.handle('results:snapshot:save', (_event, snapshot) => {
+    return storage.saveResultSnapshot(snapshot);
+  });
+
   ipcMain.handle('sites:save', (_event, site) => {
     return storage.saveSite(site);
   });
@@ -384,6 +433,14 @@ function registerIpc() {
   ipcMain.handle('sites:queryAll', async () => {
     const sites = storage.listSites();
     return mapLimit(sites, 4, queryOne);
+  });
+
+  ipcMain.handle('sites:speedTest', async (_event, id) => {
+    const site = storage.getSite(id);
+    if (!site) {
+      return speedTestOne({ id, name: 'Unknown site', baseUrl: '' });
+    }
+    return speedTestOne(site);
   });
 
   ipcMain.handle('sites:openBrowserLogin', (_event, id) => {

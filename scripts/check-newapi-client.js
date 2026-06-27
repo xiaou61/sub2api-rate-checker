@@ -78,7 +78,8 @@ async function run() {
               key: 'mock********7890',
               status: 1,
               group: 'alpha',
-              remain_quota: 9,
+              used_amount: 1,
+              remaining: 9,
               accessed_time: 1760000000
             }
           ],
@@ -120,7 +121,7 @@ async function run() {
           total_granted: 15,
           total_used: 6,
           total_available: 9,
-          unlimited_quota: false
+          unlimited_quota: 'false'
         }
       };
     } else {
@@ -159,7 +160,10 @@ async function run() {
   assert.equal(result.rates.tiny, 0.00001);
   assert.equal(result.keyRows.length, 1);
   assert.equal(result.keyRows[0].groupName, 'alpha');
+  assert.equal(result.keyRows[0].quota, 10);
+  assert.equal(result.keyRows[0].quotaRemaining, 9);
   assert.equal(result.keyRows[0].keyMasked, 'mock-k...7890');
+  assert.equal(result.keyRows[0].apiKey, 'mock-key-abc1234567890');
   assert.equal(calls.some((call) => call.path === '/api/token/' && call.auth === 'Bearer TOKEN'), true);
   assert.equal(calls.some((call) => call.path === '/api/token/batch/keys' && call.method === 'POST'), true);
   assert.equal(calls.some((call) => call.newApiUser === '77'), true);
@@ -176,6 +180,7 @@ async function run() {
 
   assert.equal(fallbackResult.keyRows.length, 1);
   assert.equal(fallbackResult.keyRows[0].keyMasked, 'mock-k...7890');
+  assert.equal(fallbackResult.keyRows[0].apiKey, 'mock-key-abc1234567890');
   assert.equal(calls.some((call) => call.path === '/api/token/batch/keys'), true);
   assert.equal(calls.some((call) => call.path === '/api/token/9/key' && call.method === 'POST'), true);
 
@@ -194,6 +199,8 @@ async function run() {
   assert.equal(relayTokenResult.keyRows[0].keyName, 'current');
   assert.equal(relayTokenResult.keyRows[0].quota, 15);
   assert.equal(relayTokenResult.keyRows[0].quotaUsed, 6);
+  assert.equal(relayTokenResult.keyRows[0].unlimitedQuota, false);
+  assert.equal(relayTokenResult.keyRows[0].apiKey, 'sk-current-token');
   assert.equal(relayTokenResult.groupFetchFallbacks.some((item) => item.code === 'NEW_API_PRICING_AUTH_REQUIRED'), true);
   assert.equal(calls.some((call) => call.path === '/api/token/'), false);
   assert.equal(calls.some((call) => call.path === '/api/usage/token/' && call.auth === 'Bearer sk-current-token'), true);

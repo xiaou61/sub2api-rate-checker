@@ -1,6 +1,6 @@
 {
   "name": "sub2api-rate-checker",
-  "version": "0.0.2",
+  "version": "0.0.9",
   "description": "Desktop rate comparison console for sub2api and New API relay stations.",
   "main": "src/main.js",
   "private": false,
@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "start": "electron .",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/storage.js && node --check src/sub2apiClient.js && node --check src/renderer/renderer.js && node --check scripts/check-rate-format.js && node --check scripts/check-newapi-client.js && node --check scripts/check-comparison-groups.js && node --check scripts/smoke-ui.js && node scripts/check-rate-format.js && node scripts/check-newapi-client.js && node scripts/check-comparison-groups.js",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/storage.js && node --check src/sub2apiClient.js && node --check src/renderer/renderer.js && node --check scripts/check-rate-format.js && node --check scripts/check-newapi-client.js && node --check scripts/check-comparison-groups.js && node --check scripts/check-site-overview.js && node --check scripts/check-storage-cache.js && node --check scripts/check-speed-test.js && node --check scripts/smoke-ui.js && node scripts/check-rate-format.js && node scripts/check-newapi-client.js && node scripts/check-comparison-groups.js && node scripts/check-site-overview.js && node scripts/check-storage-cache.js && node scripts/check-speed-test.js",
     "smoke:ui": "electron scripts/smoke-ui.js",
     "test": "npm run check",
     "dist": "electron-builder --win portable"

@@ -2,6 +2,7 @@ node_modules/
 dist/
 dist-*/
 release/
+layout-audit/
 *.log
 config.local.json
 .DS_Store

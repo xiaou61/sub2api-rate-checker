@@ -1,7 +1,15 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { buildPriceComparisonGroups, formatRateValue } = require('../src/renderer/renderer');
+const { buildPriceComparisonGroups, formatRateValue, parseGroupAliasRules } = require('../src/renderer/renderer');
+
+const aliasRules = parseGroupAliasRules(`
+  Claude Max, claude-code-max = cc-max
+  gpt fast => fast
+`);
+assert.equal(aliasRules.get('claude max'), 'cc-max');
+assert.equal(aliasRules.get('claude-code-max'), 'cc-max');
+assert.equal(aliasRules.get('gpt fast'), 'fast');
 
 const groups = buildPriceComparisonGroups([
   { siteId: 'a', siteName: 'A', baseUrl: 'https://a.test', groupName: 'cc-max', platform: 'anthropic', rate: 0.4 },

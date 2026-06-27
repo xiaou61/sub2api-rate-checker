@@ -20,6 +20,15 @@
           <button id="newSiteBtn" type="button">新建站点</button>
           <button id="browserLoginBtn" type="button">浏览器登录</button>
           <button id="captureTokenBtn" type="button">采集 Token</button>
+          <label class="startup-mode-control" title="选择下次打开工具时的默认行为">
+            <span>启动</span>
+            <select id="startupMode">
+              <option value="snapshot">看上次</option>
+              <option value="refresh">自动刷新</option>
+              <option value="blank">空白</option>
+            </select>
+          </label>
+          <button id="loadSnapshotBtn" type="button">上次结果</button>
           <button id="querySelectedBtn" type="button">查询当前</button>
           <button id="queryAllBtn" type="button" class="primary">查询全部</button>
         </div>
@@ -30,76 +39,12 @@
           <section class="panel site-panel">
             <div class="panel-title">
               <span>站点</span>
-              <span class="panel-count" id="siteCount">0</span>
+              <span class="site-panel-tools">
+                <button id="editSiteBtn" class="compact-action" type="button">编辑</button>
+                <span class="panel-count" id="siteCount">0</span>
+              </span>
             </div>
             <div id="siteList" class="site-list"></div>
-          </section>
-
-          <section class="panel editor">
-            <div class="panel-title">站点配置</div>
-            <form id="siteForm">
-              <input id="siteId" type="hidden">
-
-              <label>
-                <span>名称</span>
-                <input id="name" autocomplete="off">
-              </label>
-
-              <label>
-                <span>Base URL</span>
-                <input id="baseUrl" autocomplete="off" placeholder="https://example.com">
-              </label>
-
-              <div class="grid-two">
-                <label>
-                  <span>站点类型</span>
-                  <select id="provider">
-                    <option value="sub2api">sub2api</option>
-                    <option value="newapi">New API</option>
-                  </select>
-                </label>
-                <label>
-                  <span>New API User ID</span>
-                  <input id="newApiUserId" autocomplete="off" placeholder="可选">
-                </label>
-              </div>
-
-              <div class="grid-two">
-                <label>
-                  <span>邮箱 / 用户名</span>
-                  <input id="email" type="email" autocomplete="username">
-                </label>
-                <label>
-                  <span>密码</span>
-                  <input id="password" type="password" autocomplete="current-password">
-                </label>
-              </div>
-
-              <label>
-                <span>Turnstile Token</span>
-                <input id="turnstileToken" autocomplete="off">
-              </label>
-
-              <label>
-                <span>Auth Token</span>
-                <textarea id="authToken" rows="3" spellcheck="false"></textarea>
-              </label>
-
-              <label>
-                <span>Refresh Token</span>
-                <textarea id="refreshToken" rows="2" spellcheck="false"></textarea>
-              </label>
-
-              <label>
-                <span>备注</span>
-                <input id="notes" autocomplete="off">
-              </label>
-
-              <div class="form-actions">
-                <button id="saveSiteBtn" type="submit" class="primary">保存</button>
-                <button id="deleteSiteBtn" type="button" class="danger">删除</button>
-              </div>
-            </form>
           </section>
         </aside>
 
@@ -113,6 +58,10 @@
               <span>全站比价</span>
               <span class="panel-count" id="comparisonCount">0</span>
             </div>
+            <section class="comparison-summary-grid">
+              <div id="bestOffer" class="best-offer"></div>
+              <div id="filterOffer" class="filter-offer"></div>
+            </section>
             <div class="comparison-head">
               <div class="group-picker">
                 <div class="picker-label">
@@ -134,24 +83,48 @@
                   <div id="groupList" class="group-list" role="listbox"></div>
                 </div>
               </div>
+              <div class="favorite-toolbar">
+                <button id="favoriteOnlyBtn" class="favorite-only-button" type="button" aria-pressed="false">
+                  <span>仅看关注</span>
+                  <strong id="favoriteCount">0</strong>
+                </button>
+              </div>
             </div>
             <div id="comparisonRows" class="comparison-rows"></div>
           </section>
 
           <div class="inner-resize-handle" id="innerResizeHandle" title="拖动调整列宽"></div>
 
-          <section class="detail-head">
-            <div id="bestOffer" class="best-offer"></div>
-            <div id="filterOffer" class="filter-offer"></div>
-            <div class="detail-main" hidden>
-              <div class="eyebrow">当前站点</div>
-              <h2 id="selectedSiteTitle">请选择站点</h2>
-              <p id="selectedSiteMeta">保存或选择一个站点后展示详情。</p>
+          <section class="panel selected-site-panel">
+            <div class="panel-title">
+              <span>当前站点分组</span>
+              <span class="selected-site-actions">
+                <button id="speedTestSelectedBtn" class="compact-action" type="button">模型测速</button>
+                <button id="speedTestAllBtn" class="compact-action" type="button">全部测速</button>
+              </span>
             </div>
-            <div class="detail-source" hidden>
-              <span>分组来源</span>
-              <strong id="groupSourceText">未查询</strong>
+            <div class="selected-site-summary">
+              <div class="detail-main">
+                <div class="eyebrow">当前站点</div>
+                <h2 id="selectedSiteTitle">请选择站点</h2>
+                <p id="selectedSiteMeta">保存或选择一个站点后展示详情。</p>
+              </div>
+              <div class="selected-site-metrics">
+                <span>
+                  <small>余额</small>
+                  <strong id="selectedSiteBalance">-</strong>
+                </span>
+                <span>
+                  <small>测速</small>
+                  <strong id="selectedSiteSpeed">未测速</strong>
+                </span>
+                <span>
+                  <small>来源</small>
+                  <strong id="groupSourceText">未查询</strong>
+                </span>
+              </div>
             </div>
+            <div id="siteOverviewRows" class="selected-site-group-rows"></div>
           </section>
 
           <section class="summary-strip">
@@ -170,6 +143,10 @@
             <div>
               <span class="summary-label">Key</span>
               <strong id="summaryKeys">0</strong>
+            </div>
+            <div id="summaryBalanceCard">
+              <span class="summary-label">余额</span>
+              <strong id="summaryBalance">-</strong>
             </div>
             <div>
               <span class="summary-label">监控</span>
@@ -228,6 +205,93 @@
           </section>
         </section>
       </main>
+
+      <div id="siteModal" class="modal-backdrop" hidden>
+        <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="siteModalTitle">
+          <div class="modal-head">
+            <div>
+              <span class="section-kicker">站点配置</span>
+              <h2 id="siteModalTitle">编辑站点</h2>
+            </div>
+            <button id="closeSiteModalBtn" class="icon-action" type="button" aria-label="关闭">×</button>
+          </div>
+          <form id="siteForm">
+            <input id="siteId" type="hidden">
+
+            <label>
+              <span>名称</span>
+              <input id="name" autocomplete="off">
+            </label>
+
+            <label>
+              <span>Base URL</span>
+              <input id="baseUrl" autocomplete="off" placeholder="https://example.com">
+            </label>
+
+            <div class="grid-two">
+              <label>
+                <span>站点类型</span>
+                <select id="provider">
+                  <option value="sub2api">sub2api</option>
+                  <option value="newapi">New API</option>
+                </select>
+              </label>
+              <label>
+                <span>New API User ID</span>
+                <input id="newApiUserId" autocomplete="off" placeholder="可选">
+              </label>
+            </div>
+
+            <div class="grid-two">
+              <label>
+                <span>邮箱 / 用户名</span>
+                <input id="email" type="email" autocomplete="username">
+              </label>
+              <label>
+                <span>密码</span>
+                <input id="password" type="password" autocomplete="current-password">
+              </label>
+            </div>
+
+            <label>
+              <span>Turnstile Token</span>
+              <input id="turnstileToken" autocomplete="off">
+            </label>
+
+            <label>
+              <span>Auth Token</span>
+              <textarea id="authToken" rows="3" spellcheck="false"></textarea>
+            </label>
+
+            <label>
+              <span>Refresh Token</span>
+              <textarea id="refreshToken" rows="2" spellcheck="false"></textarea>
+            </label>
+
+            <label>
+              <span>测速模型</span>
+              <input id="speedTestModel" autocomplete="off" placeholder="可选，例如 gpt-4o-mini">
+              <small class="field-hint">留空时优先使用该站点渠道监控里的主模型。</small>
+            </label>
+
+            <label>
+              <span>备注</span>
+              <input id="notes" autocomplete="off">
+            </label>
+
+            <label>
+              <span>分组别名</span>
+              <textarea id="groupAliases" rows="3" spellcheck="false" placeholder="claude-code-max = cc-max&#10;Claude Max = cc-max"></textarea>
+              <small class="field-hint">把不同站点的同类分组归到一个名字，方便全站比价。</small>
+            </label>
+
+            <div class="form-actions">
+              <button id="saveSiteBtn" type="submit" class="primary">保存</button>
+              <button id="deleteSiteBtn" type="button" class="danger">删除</button>
+            </div>
+          </form>
+        </section>
+      </div>
     </div>
 
     <script src="./renderer.js"></script>

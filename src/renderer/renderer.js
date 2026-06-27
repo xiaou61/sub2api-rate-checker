@@ -14,7 +14,14 @@ const state = {
   groupFilter: 'all',
   groupSearch: '',
   groupDropdownOpen: false,
-  selectedComparisonKey: ''
+  selectedComparisonKey: '',
+  favoriteGroups: [],
+  favoriteOnly: false,
+  speedResults: {},
+  speedBusySiteIds: [],
+  resultSnapshotUpdatedAt: '',
+  hasResultSnapshot: false,
+  startupMode: 'snapshot'
 };
 
 const elements = {
@@ -26,15 +33,23 @@ const elements = {
   baseUrl: byId('baseUrl'),
   provider: byId('provider'),
   newApiUserId: byId('newApiUserId'),
+  speedTestModel: byId('speedTestModel'),
   email: byId('email'),
   password: byId('password'),
   turnstileToken: byId('turnstileToken'),
   authToken: byId('authToken'),
   refreshToken: byId('refreshToken'),
+  groupAliases: byId('groupAliases'),
   notes: byId('notes'),
+  siteModal: byId('siteModal'),
+  siteModalTitle: byId('siteModalTitle'),
+  closeSiteModalBtn: byId('closeSiteModalBtn'),
   newSiteBtn: byId('newSiteBtn'),
+  editSiteBtn: byId('editSiteBtn'),
   browserLoginBtn: byId('browserLoginBtn'),
   captureTokenBtn: byId('captureTokenBtn'),
+  startupMode: byId('startupMode'),
+  loadSnapshotBtn: byId('loadSnapshotBtn'),
   saveSiteBtn: byId('saveSiteBtn'),
   deleteSiteBtn: byId('deleteSiteBtn'),
   querySelectedBtn: byId('querySelectedBtn'),
@@ -45,6 +60,8 @@ const elements = {
   summarySuccess: byId('summarySuccess'),
   summaryFailed: byId('summaryFailed'),
   summaryKeys: byId('summaryKeys'),
+  summaryBalance: byId('summaryBalance'),
+  summaryBalanceCard: byId('summaryBalanceCard'),
   summaryMonitors: byId('summaryMonitors'),
   monitorRows: byId('monitorRows'),
   groupFilterLabel: byId('groupFilterLabel'),
@@ -60,7 +77,14 @@ const elements = {
   filterOffer: byId('filterOffer'),
   comparisonRows: byId('comparisonRows'),
   comparisonCount: byId('comparisonCount'),
+  favoriteOnlyBtn: byId('favoriteOnlyBtn'),
+  favoriteCount: byId('favoriteCount'),
+  siteOverviewRows: byId('siteOverviewRows'),
+  speedTestAllBtn: byId('speedTestAllBtn'),
+  speedTestSelectedBtn: byId('speedTestSelectedBtn'),
   siteCount: byId('siteCount'),
+  selectedSiteBalance: byId('selectedSiteBalance'),
+  selectedSiteSpeed: byId('selectedSiteSpeed'),
   selectedSiteTitle: byId('selectedSiteTitle'),
   selectedSiteMeta: byId('selectedSiteMeta')
 };
@@ -150,6 +174,14 @@ function formatLatency(value) {
   return `${Math.round(Number(value))} ms`;
 }
 
+function formatBalanceValue(value) {
+  const number = toFiniteNumber(value);
+  if (number === null) {
+    return '';
+  }
+  return formatRate(number);
+}
+
 function statusClassForValue(value) {
   const status = normalizeText(value);
   if (!status || status === '-') {
@@ -211,13 +243,9 @@ function visibleResults() {
   return result ? [result] : [];
 }
 
-function clearForm() {
-  state.selectedId = '';
-  state.groupFilter = 'all';
-  state.groupSearch = '';
-  state.selectedComparisonKey = '';
-  if (elements.groupSearch) {
-    elements.groupSearch.value = '';
+function resetSiteForm() {
+  if (!elements.siteForm) {
+    return;
   }
   elements.siteForm.reset();
   elements.siteId.value = '';
@@ -227,6 +255,64 @@ function clearForm() {
   if (elements.newApiUserId) {
     elements.newApiUserId.value = '';
   }
+  if (elements.speedTestModel) {
+    elements.speedTestModel.value = '';
+  }
+}
+
+function openSiteModal(mode = 'edit') {
+  if (!elements.siteModal) {
+    return;
+  }
+  if (elements.siteModalTitle) {
+    elements.siteModalTitle.textContent = mode === 'new' ? '新增站点' : '编辑站点';
+  }
+  if (elements.deleteSiteBtn) {
+    elements.deleteSiteBtn.disabled = mode === 'new';
+  }
+  elements.siteModal.hidden = false;
+  document.body.classList.add('modal-open');
+  requestAnimationFrame(() => {
+    const target = mode === 'new' ? elements.name || elements.baseUrl : elements.baseUrl || elements.name;
+    if (target) {
+      target.focus();
+      target.select?.();
+    }
+  });
+}
+
+function closeSiteModal() {
+  if (!elements.siteModal) {
+    return;
+  }
+  elements.siteModal.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function prepareNewSite() {
+  resetSiteForm();
+  openSiteModal('new');
+}
+
+function editSelectedSite() {
+  const site = selectedSite();
+  if (!site) {
+    setStatus('请选择站点', 'bad');
+    return;
+  }
+  fillForm(site, { preserveView: true, render: false });
+  openSiteModal('edit');
+}
+
+function clearForm() {
+  state.selectedId = '';
+  state.groupFilter = 'all';
+  state.groupSearch = '';
+  state.selectedComparisonKey = '';
+  if (elements.groupSearch) {
+    elements.groupSearch.value = '';
+  }
+  resetSiteForm();
   renderSites();
   renderResults();
 }
@@ -250,11 +336,17 @@ function fillForm(site, options = {}) {
   if (elements.newApiUserId) {
     elements.newApiUserId.value = site.newApiUserId || '';
   }
+  if (elements.speedTestModel) {
+    elements.speedTestModel.value = site.speedTestModel || '';
+  }
   elements.email.value = site.email || '';
   elements.password.value = site.password || '';
   elements.turnstileToken.value = site.turnstileToken || '';
   elements.authToken.value = site.authToken || '';
   elements.refreshToken.value = site.refreshToken || '';
+  if (elements.groupAliases) {
+    elements.groupAliases.value = site.groupAliases || '';
+  }
   elements.notes.value = site.notes || '';
   renderSites();
   if (options.render !== false) {
@@ -263,7 +355,7 @@ function fillForm(site, options = {}) {
 }
 
 function readForm() {
-  const current = selectedSite();
+  const current = state.sites.find((site) => site.id === elements.siteId.value) || null;
   const password = elements.password.value.trim();
   const turnstileToken = elements.turnstileToken.value.trim();
   const authToken = elements.authToken.value.trim();
@@ -275,11 +367,13 @@ function readForm() {
     baseUrl: elements.baseUrl.value,
     provider: elements.provider ? elements.provider.value : 'sub2api',
     newApiUserId: elements.newApiUserId ? elements.newApiUserId.value.trim() : '',
+    speedTestModel: elements.speedTestModel ? elements.speedTestModel.value.trim() : '',
     email: elements.email.value,
     password: password || (current ? undefined : ''),
     turnstileToken: turnstileToken || (current ? undefined : ''),
     authToken: authToken || (current ? undefined : ''),
     refreshToken: refreshToken || (current ? undefined : ''),
+    groupAliases: elements.groupAliases ? elements.groupAliases.value : '',
     notes: elements.notes.value
   };
 }
@@ -287,6 +381,9 @@ function readForm() {
 function renderSites() {
   if (elements.siteCount) {
     elements.siteCount.textContent = String(state.sites.length);
+  }
+  if (elements.editSiteBtn) {
+    elements.editSiteBtn.disabled = !state.selectedId;
   }
 
   if (state.sites.length === 0) {
@@ -299,6 +396,15 @@ function renderSites() {
       const active = site.id === state.selectedId ? ' active' : '';
       const hasToken = site.authToken || site.refreshToken ? '<span class="site-badge">token</span>' : '';
       const provider = site.provider === 'newapi' ? 'New API' : 'sub2api';
+      const result = state.results.find((item) => item.siteId === site.id);
+      const keyRows = result ? (Array.isArray(result.keyRows) ? result.keyRows : result.rows || []) : [];
+      const balance = result && result.ok && keyRows.length > 0 ? balanceSummaryText(buildBalanceSummary(keyRows)) : '';
+      const entries = result && result.ok
+        ? buildComparisonEntriesForResults([result], { applyFilter: false })
+          .filter((entry) => toPositiveRate(entry.rate) !== null && formatRateValue(entry.rate))
+        : [];
+      const best = entries.length > 0 ? `最低 x${formatRateValue(entries[0].rate)}` : result ? result.ok ? '暂无倍率' : '查询失败' : '未查询';
+      const meta = [best, balance].filter(Boolean).join(' · ');
       return `
         <button class="site-row${active}" data-site-id="${escapeHtml(site.id)}" type="button">
           <span class="site-name">${escapeHtml(site.name || site.baseUrl)}</span>
@@ -307,6 +413,7 @@ function renderSites() {
             ${hasToken}
           </span>
           <span class="site-url">${escapeHtml(site.baseUrl)}</span>
+          <span class="site-row-meta">${escapeHtml(meta)}</span>
         </button>
       `;
     })
@@ -328,10 +435,18 @@ function renderSummary() {
   const failed = results.filter((result) => !result.ok);
   const rows = success.flatMap((result) => (result.keyRows || result.rows || []).filter((row) => rowMatchesGroup(row, state.groupFilter, result)));
   const monitors = success.flatMap((result) => (result.monitorRows || []).filter((row) => rowMatchesGroup(row, state.groupFilter, result)));
+  const balance = buildBalanceSummary(rows);
   elements.summarySites.textContent = String(results.length);
   elements.summarySuccess.textContent = String(success.length);
   elements.summaryFailed.textContent = String(failed.length);
   elements.summaryKeys.textContent = String(rows.length);
+  if (elements.summaryBalance) {
+    elements.summaryBalance.textContent = balance.healthText;
+  }
+  if (elements.summaryBalanceCard) {
+    elements.summaryBalanceCard.className = `summary-balance ${balanceHealthClass(balance)}`;
+    elements.summaryBalanceCard.title = balanceSummaryText(balance);
+  }
   elements.summaryMonitors.textContent = String(monitors.length);
 }
 
@@ -355,6 +470,69 @@ function normalizeText(value) {
   return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+function parseGroupAliasRules(value) {
+  const rules = new Map();
+  const lines = String(value || '').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#') || line.startsWith('//')) {
+      continue;
+    }
+    const match = line.match(/^(.*?)\s*(?:=>|=)\s*(.*?)$/);
+    if (!match) {
+      continue;
+    }
+    const target = match[2].trim();
+    if (!target) {
+      continue;
+    }
+    const sources = match[1]
+      .split(/[,\|]/)
+      .map((source) => source.trim())
+      .filter(Boolean);
+    for (const source of sources) {
+      const key = normalizeText(source);
+      if (key) {
+        rules.set(key, target);
+      }
+    }
+  }
+  return rules;
+}
+
+function siteForResult(result) {
+  if (!result) {
+    return null;
+  }
+  return state.sites.find((site) => site.id === result.siteId) ||
+    state.sites.find((site) => normalizeText(site.baseUrl) === normalizeText(result.baseUrl)) ||
+    null;
+}
+
+function aliasRulesForResult(result) {
+  const site = siteForResult(result);
+  return parseGroupAliasRules(site ? site.groupAliases : '');
+}
+
+function canonicalizeGroupOption(option, result) {
+  const rawLabel = option.label || option.value || '';
+  const rules = aliasRulesForResult(result);
+  const canonicalLabel = rules.get(normalizeText(rawLabel)) || rules.get(normalizeText(option.value)) || rawLabel;
+  const canonicalKey = normalizeText(canonicalLabel);
+  const aliases = new Set([rawLabel, canonicalLabel, option.value, ...(option.aliases || [])]);
+  for (const [source, target] of rules.entries()) {
+    if (normalizeText(target) === canonicalKey) {
+      aliases.add(source);
+    }
+  }
+  return {
+    ...option,
+    label: canonicalLabel,
+    sourceLabel: rawLabel,
+    aliases: [...aliases].filter(Boolean)
+  };
+}
+
 function formatRateValue(value) {
   const number = toPositiveRate(value);
   if (number === null) {
@@ -365,6 +543,307 @@ function formatRateValue(value) {
 
 function groupSignature(label, platform) {
   return `${normalizeText(platform)}|${normalizeText(label)}`;
+}
+
+function firstDefinedValue(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== '') {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function toBooleanFlag(value) {
+  if (value === true || value === 1) {
+    return true;
+  }
+  if (value === false || value === 0 || value === null || value === undefined || value === '') {
+    return false;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  return ['1', 'true', 'yes', 'y', 'on', 'unlimited', 'infinite'].includes(normalized);
+}
+
+function rowBalance(row) {
+  const quota = toFiniteNumber(row && firstDefinedValue(
+    row.quota,
+    row.totalQuota,
+    row.total_quota,
+    row.total,
+    row.quotaLimit,
+    row.quota_limit,
+    row.limit,
+    row.amount,
+    row.totalAmount,
+    row.total_amount
+  ));
+  const used = toFiniteNumber(row && firstDefinedValue(
+    row.quotaUsed,
+    row.usedQuota,
+    row.used_quota,
+    row.usedAmount,
+    row.used_amount,
+    row.usedTokens,
+    row.used_tokens,
+    row.consumedQuota,
+    row.consumed_quota,
+    row.used
+  ));
+  const remaining = toFiniteNumber(row && (
+    row.quotaRemaining ??
+    row.remainingQuota ??
+    row.remainQuota ??
+    row.remaining_quota ??
+    row.remain_quota ??
+    row.quota_remaining ??
+    row.remaining ??
+    row.remain ??
+    row.availableQuota ??
+    row.available_quota ??
+    row.available ??
+    row.leftQuota ??
+    row.left_quota ??
+    row.quotaLeft ??
+    row.quota_left ??
+    row.balance
+  ));
+  const hasQuota = quota !== null && quota > 0;
+  const hasUsed = used !== null && used >= 0;
+  const hasRemaining = remaining !== null && remaining >= 0;
+  const unlimited = row && (
+    toBooleanFlag(firstDefinedValue(
+      row.unlimitedQuota,
+      row.unlimited_quota,
+      row.isUnlimited,
+      row.is_unlimited,
+      row.unlimited
+    )) ||
+    (quota !== null && quota < 0) ||
+    ['unlimited', 'infinite', 'inf'].includes(String(firstDefinedValue(row.quota, row.totalQuota, row.total_quota) || '').trim().toLowerCase())
+  );
+  if (unlimited) {
+    return {
+      known: true,
+      unlimited: true,
+      quota: null,
+      used: hasUsed ? used : 0,
+      remaining: null,
+      quotaKnown: false,
+      remainingKnown: false
+    };
+  }
+  if (hasQuota) {
+    const usedValue = hasUsed ? used : 0;
+    return {
+      known: true,
+      unlimited: false,
+      quota,
+      used: usedValue,
+      remaining: hasRemaining ? remaining : Math.max(quota - usedValue, 0),
+      quotaKnown: true,
+      remainingKnown: true
+    };
+  }
+  if (hasRemaining) {
+    const derivedQuota = hasUsed ? used + remaining : null;
+    return {
+      known: true,
+      unlimited: false,
+      quota: derivedQuota,
+      used: hasUsed ? used : null,
+      remaining,
+      quotaKnown: derivedQuota !== null,
+      remainingKnown: true
+    };
+  }
+  return {
+    known: false,
+    unlimited: false,
+    quota: null,
+    used: hasUsed ? used : null,
+    remaining: null,
+    quotaKnown: false,
+    remainingKnown: false
+  };
+}
+
+function buildBalanceSummary(rows) {
+  const summary = {
+    keyCount: 0,
+    knownCount: 0,
+    unlimitedCount: 0,
+    unknownCount: 0,
+    quotaKnownCount: 0,
+    remainingKnownCount: 0,
+    quota: 0,
+    used: 0,
+    remaining: 0
+  };
+
+  for (const row of rows || []) {
+    summary.keyCount += 1;
+    const balance = rowBalance(row);
+    if (balance.unlimited) {
+      summary.unlimitedCount += 1;
+      if (balance.used !== null) {
+        summary.used += balance.used;
+      }
+      continue;
+    }
+    if (balance.known) {
+      summary.knownCount += 1;
+      if (balance.quotaKnown && balance.quota !== null) {
+        summary.quotaKnownCount += 1;
+        summary.quota += balance.quota;
+      }
+      if (balance.used !== null) {
+        summary.used += balance.used;
+      }
+      if (balance.remainingKnown && balance.remaining !== null) {
+        summary.remainingKnownCount += 1;
+        summary.remaining += balance.remaining;
+      }
+      continue;
+    }
+    summary.unknownCount += 1;
+  }
+
+  summary.healthLevel = balanceHealthLevel(summary);
+  summary.healthText = balanceHealthText(summary);
+  return summary;
+}
+
+function balanceHealthLevel(summary) {
+  if (!summary || summary.keyCount === 0) {
+    return 'empty';
+  }
+  if (summary.quotaKnownCount > 0 && summary.quota > 0) {
+    const remainingRatio = summary.remaining / summary.quota;
+    if (remainingRatio <= 0.05) {
+      return 'danger';
+    }
+    if (remainingRatio <= 0.2) {
+      return 'warn';
+    }
+  }
+  if (summary.remainingKnownCount > 0 && summary.quotaKnownCount === 0 && summary.remaining <= 10) {
+    return 'warn';
+  }
+  if (summary.knownCount === 0 && summary.unlimitedCount === 0 && summary.unknownCount > 0) {
+    return 'unknown';
+  }
+  if (summary.unknownCount > 0) {
+    return 'unknown';
+  }
+  if (summary.knownCount === 0 && summary.unlimitedCount > 0) {
+    return 'unlimited';
+  }
+  return 'good';
+}
+
+function balanceHealthText(summary) {
+  const level = summary && summary.healthLevel ? summary.healthLevel : balanceHealthLevel(summary);
+  if (level === 'danger') {
+    return '余额紧张';
+  }
+  if (level === 'warn') {
+    return '余额偏低';
+  }
+  if (level === 'unknown') {
+    return '余额未知';
+  }
+  if (level === 'unlimited') {
+    return '不限量';
+  }
+  if (level === 'empty') {
+    return '无 Key';
+  }
+  return '余额正常';
+}
+
+function balanceHealthClass(summary) {
+  return `balance-${summary && summary.healthLevel ? summary.healthLevel : balanceHealthLevel(summary)}`;
+}
+
+function balanceSummaryText(summary) {
+  if (!summary || summary.keyCount === 0) {
+    return '无 Key';
+  }
+  const parts = [];
+  if (summary.knownCount > 0) {
+    if (summary.quotaKnownCount > 0) {
+      parts.push(`剩 ${formatBalanceValue(summary.remaining)} / 总 ${formatBalanceValue(summary.quota)}`);
+    } else if (summary.remainingKnownCount > 0) {
+      parts.push(`剩 ${formatBalanceValue(summary.remaining)}`);
+    }
+  }
+  if (summary.unlimitedCount > 0) {
+    parts.push(`不限量 ${summary.unlimitedCount}`);
+  }
+  if (summary.unknownCount > 0) {
+    parts.push(`未知 ${summary.unknownCount}`);
+  }
+  return parts.join(' · ') || '余额未知';
+}
+
+function rowBalanceText(row) {
+  const balance = rowBalance(row);
+  if (balance.unlimited) {
+    return balance.used !== null ? `不限量 · 已用 ${formatBalanceValue(balance.used)}` : '不限量';
+  }
+  if (!balance.known) {
+    return balance.used !== null ? `已用 ${formatBalanceValue(balance.used)} · 余额未知` : '';
+  }
+  if (balance.quotaKnown && balance.quota !== null) {
+    const used = balance.used !== null ? formatBalanceValue(balance.used) : '0';
+    return `剩 ${formatBalanceValue(balance.remaining)} / 总 ${formatBalanceValue(balance.quota)} · 已用 ${used}`;
+  }
+  return `剩 ${formatBalanceValue(balance.remaining)}`;
+}
+
+function buildSiteOverviewRows(results = state.results) {
+  return (results || [])
+    .map((result) => {
+      const keyRows = Array.isArray(result.keyRows) ? result.keyRows : result.rows || [];
+      const entries = result && result.ok
+        ? buildComparisonEntriesForResults([result], { applyFilter: false })
+          .filter((entry) => toPositiveRate(entry.rate) !== null && formatRateValue(entry.rate))
+        : [];
+      const bestOffer = entries.length > 0 ? entries[0] : null;
+      const balance = buildBalanceSummary(keyRows);
+      const speed = state.speedResults[result.siteId] || null;
+      const busy = state.speedBusySiteIds.includes(result.siteId);
+      return {
+        siteId: result.siteId,
+        siteName: result.siteName || result.baseUrl,
+        baseUrl: result.baseUrl,
+        provider: result.provider || 'sub2api',
+        ok: Boolean(result.ok),
+        groupCount: result.summary && result.summary.groups !== undefined ? result.summary.groups : (result.groups || []).length,
+        keyCount: keyRows.length,
+        monitorCount: result.summary && result.summary.monitorRows !== undefined ? result.summary.monitorRows : (result.monitorRows || []).length,
+        bestOffer,
+        balance,
+        error: result.error || null,
+        speed,
+        busy
+      };
+    })
+    .sort((a, b) => {
+      if (a.ok !== b.ok) {
+        return a.ok ? -1 : 1;
+      }
+      const rateA = a.bestOffer ? a.bestOffer.rate : Number.POSITIVE_INFINITY;
+      const rateB = b.bestOffer ? b.bestOffer.rate : Number.POSITIVE_INFINITY;
+      if (rateA !== rateB) {
+        return rateA - rateB;
+      }
+      if (a.keyCount !== b.keyCount) {
+        return b.keyCount - a.keyCount;
+      }
+      return String(a.siteName || '').localeCompare(String(b.siteName || ''), 'zh-Hans-CN');
+    });
 }
 
 function resolveGroupRate(group, result) {
@@ -464,14 +943,14 @@ function groupOptionsFromResult(result) {
 
   for (const group of groups) {
     const label = group.name || `#${group.id}`;
-    upsertGroupOption(groupMap, labelIndex, {
+    upsertGroupOption(groupMap, labelIndex, canonicalizeGroupOption({
       value: group.id !== undefined && group.id !== null ? String(group.id) : label,
       label,
       platform: group.platform || '',
       rate: resolveGroupRate(group, result),
       status: group.status || '',
       aliases: [group.name, group.group_name, group.groupName]
-    });
+    }, result));
   }
 
   for (const row of keyRows) {
@@ -479,28 +958,28 @@ function groupOptionsFromResult(result) {
       continue;
     }
     const label = row.groupName || `#${row.groupId}`;
-    upsertGroupOption(groupMap, labelIndex, {
+    upsertGroupOption(groupMap, labelIndex, canonicalizeGroupOption({
       value: String(row.groupId),
       label,
       platform: row.platform || '',
       rate: toPositiveRate(row.customRate ?? row.defaultRate ?? row.effectiveRate),
       status: row.keyStatus || '',
       aliases: [row.groupName]
-    });
+    }, result));
   }
 
   for (const row of monitorRows) {
     if (!row.groupName) {
       continue;
     }
-    upsertGroupOption(groupMap, labelIndex, {
+    upsertGroupOption(groupMap, labelIndex, canonicalizeGroupOption({
       value: `name:${row.groupName}`,
       label: row.groupName,
       platform: row.provider || '',
       rate: toPositiveRate(row.rate ?? row.defaultRate ?? row.primaryRate ?? row.primary_rate),
       status: row.primaryStatus || row.status || '',
       aliases: [row.groupName]
-    });
+    }, result));
   }
 
   const options = [];
@@ -547,6 +1026,81 @@ function comparisonGroupFilterValueFromParts(groupName, platform) {
 
 function comparisonGroupFilterValue(option) {
   return comparisonGroupFilterValueFromParts(option.label, option.platform || '-');
+}
+
+function favoriteGroupKey(groupName, platform) {
+  return comparisonGroupKey(groupName, platform || '-');
+}
+
+function isFavoriteGroup(group) {
+  return state.favoriteGroups.includes(favoriteGroupKey(group.groupName, group.platform));
+}
+
+function normalizeStartupMode(value) {
+  return ['snapshot', 'refresh', 'blank'].includes(value) ? value : 'snapshot';
+}
+
+function startupModeLabel(mode) {
+  if (mode === 'refresh') {
+    return '自动刷新';
+  }
+  if (mode === 'blank') {
+    return '保持空白';
+  }
+  return '看上次结果';
+}
+
+async function saveFavoriteGroups() {
+  if (!window.sub2api || typeof window.sub2api.savePreferences !== 'function') {
+    return;
+  }
+  try {
+    const preferences = await window.sub2api.savePreferences({
+      favoriteGroups: state.favoriteGroups,
+      startupMode: state.startupMode
+    });
+    if (preferences && Array.isArray(preferences.favoriteGroups)) {
+      state.favoriteGroups = preferences.favoriteGroups;
+    }
+    state.startupMode = normalizeStartupMode(preferences && preferences.startupMode);
+  } catch (error) {
+    setStatus(error.message || '保存关注分组失败', 'bad');
+  }
+}
+
+async function saveStartupMode() {
+  if (!window.sub2api || typeof window.sub2api.savePreferences !== 'function') {
+    return;
+  }
+  try {
+    const preferences = await window.sub2api.savePreferences({
+      favoriteGroups: state.favoriteGroups,
+      startupMode: state.startupMode
+    });
+    state.startupMode = normalizeStartupMode(preferences && preferences.startupMode);
+    if (elements.startupMode) {
+      elements.startupMode.value = state.startupMode;
+    }
+    setStatus(`已设置启动时${startupModeLabel(state.startupMode)}`, 'ok');
+  } catch (error) {
+    setStatus(error.message || '启动方式保存失败', 'bad');
+  }
+}
+
+async function toggleFavoriteGroup(groupName, platform) {
+  const key = favoriteGroupKey(groupName, platform);
+  const next = new Set(state.favoriteGroups);
+  if (next.has(key)) {
+    next.delete(key);
+  } else {
+    next.add(key);
+  }
+  state.favoriteGroups = [...next];
+  if (state.favoriteOnly && state.favoriteGroups.length === 0) {
+    state.favoriteOnly = false;
+  }
+  renderResults();
+  await saveFavoriteGroups();
 }
 
 function groupOptionsFromResults(results) {
@@ -724,6 +1278,7 @@ function groupEntryMatchesSearch(entry, query) {
     entry.platform,
     entry.status,
     ...(entry.siteNames || []),
+    ...(entry.aliases || []),
     toPositiveRate(entry.rate) !== null ? `x${formatRateValue(entry.rate)}` : '',
     entry.kind
   ].join(' ').toLowerCase();
@@ -796,9 +1351,7 @@ function renderGroupDirectory(result) {
   const useAllSiteGroups = successResults.length > 1;
   const directoryResults = useAllSiteGroups ? successResults : result && result.ok ? [result] : [];
   if (elements.groupSourceText) {
-    elements.groupSourceText.textContent = useAllSiteGroups
-      ? `全站比价 · ${directoryResults.length} 个站点`
-      : groupSourceLabel(result);
+    elements.groupSourceText.textContent = result && result.ok ? groupSourceLabel(result) : '未查询';
   }
   if (!elements.groupList || !elements.groupDropdownBtn) {
     return;
@@ -990,12 +1543,12 @@ function optionMatchesActiveFilter(option) {
   return sameLabel && samePlatform;
 }
 
-function buildComparisonEntries(options = {}) {
+function buildComparisonEntriesForResults(results, options = {}) {
   const entries = [];
   const seen = new Map();
   const applyFilter = options.applyFilter !== false;
 
-  for (const result of successfulResults()) {
+  for (const result of results || []) {
     for (const option of groupOptionsFromResult(result)) {
       if (applyFilter && !optionMatchesActiveFilter(option)) {
         continue;
@@ -1038,6 +1591,10 @@ function buildComparisonEntries(options = {}) {
     return a.siteName.localeCompare(b.siteName, 'zh-Hans-CN');
   });
   return entries;
+}
+
+function buildComparisonEntries(options = {}) {
+  return buildComparisonEntriesForResults(successfulResults(), options);
 }
 
 function comparisonGroupKey(groupName, platform) {
@@ -1108,7 +1665,8 @@ function selectedComparisonGroup(groups) {
 
 function filteredComparisonGroups() {
   const entries = buildComparisonEntries().filter((entry) => toPositiveRate(entry.rate) !== null && formatRateValue(entry.rate));
-  return buildPriceComparisonGroups(entries);
+  const groups = buildPriceComparisonGroups(entries);
+  return state.favoriteOnly ? groups.filter(isFavoriteGroup) : groups;
 }
 
 function globalComparisonGroups() {
@@ -1220,6 +1778,14 @@ function renderComparison() {
   if (elements.comparisonCount) {
     elements.comparisonCount.textContent = String(groups.length);
   }
+  if (elements.favoriteCount) {
+    elements.favoriteCount.textContent = String(state.favoriteGroups.length);
+  }
+  if (elements.favoriteOnlyBtn) {
+    elements.favoriteOnlyBtn.classList.toggle('active', state.favoriteOnly);
+    elements.favoriteOnlyBtn.disabled = state.favoriteGroups.length === 0;
+    elements.favoriteOnlyBtn.setAttribute('aria-pressed', state.favoriteOnly ? 'true' : 'false');
+  }
 
   if (successfulResults().length === 0) {
     elements.bestOffer.innerHTML = '<div class="empty-state compact"><strong>暂无比价数据</strong><span>查询全部后会汇总每个站点的分组倍率。</span></div>';
@@ -1244,7 +1810,9 @@ function renderComparison() {
 
   if (groups.length === 0) {
     renderFilterOffer(null, groups);
-    elements.comparisonRows.innerHTML = '<div class="empty-state compact"><strong>当前筛选无报价</strong><span>切回全部分组查看完整比价。</span></div>';
+    elements.comparisonRows.innerHTML = state.favoriteOnly
+      ? '<div class="empty-state compact"><strong>关注分组暂无报价</strong><span>取消「仅看关注」或给排行榜分组点星标。</span></div>'
+      : '<div class="empty-state compact"><strong>当前筛选无报价</strong><span>切回全部分组查看完整比价。</span></div>';
     return;
   }
 
@@ -1257,8 +1825,12 @@ function renderComparison() {
       const active = group.key === selectedGroup.key ? ' active' : '';
       const tieText = group.bestSites.length > 1 ? `并列 ${group.bestSites.length} 家` : '最低 1 家';
       const runnerText = runnerUpText(group);
+      const favorite = isFavoriteGroup(group);
       return `
         <button class="comparison-row ${index === 0 ? 'winner' : ''}${active}" type="button" aria-pressed="${group.key === selectedGroup.key ? 'true' : 'false'}" data-comparison-key="${escapeHtml(group.key)}" data-site-id="${escapeHtml(group.bestSites[0].siteId)}" data-group-name="${escapeHtml(group.groupName)}" data-platform="${escapeHtml(group.platform)}">
+          <span class="favorite-cell">
+            <span class="favorite-toggle ${favorite ? 'active' : ''}" role="button" tabindex="0" aria-pressed="${favorite ? 'true' : 'false'}" title="${favorite ? '取消关注' : '关注分组'}" data-group-name="${escapeHtml(group.groupName)}" data-platform="${escapeHtml(group.platform)}">${favorite ? '★' : '☆'}</span>
+          </span>
           <span class="rank">${index + 1}</span>
           <span class="comparison-main">
             <strong>${escapeHtml(group.groupName)}</strong>
@@ -1294,6 +1866,234 @@ function renderComparison() {
       selectComparisonTarget(button.dataset.siteId, button.dataset.groupName, button.dataset.platform);
     });
   }
+
+  for (const toggle of document.querySelectorAll('.favorite-toggle')) {
+    const onToggle = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleFavoriteGroup(toggle.dataset.groupName, toggle.dataset.platform);
+    };
+    toggle.addEventListener('click', onToggle);
+    toggle.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        onToggle(event);
+      }
+    });
+  }
+}
+
+function speedSummaryText(speed) {
+  if (!speed) {
+    return '未测速';
+  }
+  if (speed.summary && toFiniteNumber(speed.summary.fastestLatencyMs) !== null) {
+    return `最快 ${formatLatency(speed.summary.fastestLatencyMs)}`;
+  }
+  if (speed.error && speed.error.message) {
+    return speed.error.message;
+  }
+  return speed.ok ? '可用' : '测速失败';
+}
+
+function speedDetailText(speed) {
+  if (!speed) {
+    return '未测速';
+  }
+  const fastest = speed.summary && toFiniteNumber(speed.summary.fastestLatencyMs) !== null
+    ? formatLatency(speed.summary.fastestLatencyMs)
+    : '';
+  const okCount = speed.summary ? `${speed.summary.ok || 0}/${speed.summary.total || 0}` : '';
+  const bestRow = Array.isArray(speed.rows)
+    ? speed.rows.filter((row) => row && row.ok).sort((a, b) => (a.latencyMs || 0) - (b.latencyMs || 0))[0]
+    : null;
+  const model = bestRow && bestRow.model ? ` · ${bestRow.model}` : '';
+  if (fastest) {
+    return `${fastest}${okCount ? ` · ${okCount}` : ''}${model}`;
+  }
+  if (speed.error && speed.error.message) {
+    return speed.error.message;
+  }
+  return speed.ok ? `可用${model}` : '测速失败';
+}
+
+function selectedSiteBalanceText(result) {
+  if (!result || !result.ok) {
+    return '-';
+  }
+  const rows = Array.isArray(result.keyRows) ? result.keyRows : result.rows || [];
+  return balanceSummaryText(buildBalanceSummary(rows));
+}
+
+function selectedSiteBalanceSummary(result) {
+  if (!result || !result.ok) {
+    return buildBalanceSummary([]);
+  }
+  const rows = Array.isArray(result.keyRows) ? result.keyRows : result.rows || [];
+  return buildBalanceSummary(rows);
+}
+
+function selectGroupFromSelectedSite(option) {
+  if (!option) {
+    return;
+  }
+  const aggregateValue = comparisonGroupFilterValueFromParts(option.label, option.platform);
+  const hasAggregateValue = groupOptionsFromResults(successfulResults()).some((item) => item.value === aggregateValue);
+  state.groupFilter = hasAggregateValue ? aggregateValue : option.value;
+  state.selectedComparisonKey = comparisonGroupKey(option.label, option.platform);
+  setGroupDropdownOpen(false);
+  renderResults();
+}
+
+function renderSiteOverview() {
+  if (!elements.siteOverviewRows) {
+    return;
+  }
+
+  const site = selectedSite();
+  const result = selectedResult();
+  const speed = site ? state.speedResults[site.id] || null : null;
+  const busy = site ? state.speedBusySiteIds.includes(site.id) : false;
+  if (elements.speedTestAllBtn) {
+    elements.speedTestAllBtn.disabled = buildSiteOverviewRows().length === 0 || state.speedBusySiteIds.length > 0;
+  }
+  if (elements.speedTestSelectedBtn) {
+    const keyRows = result ? (Array.isArray(result.keyRows) ? result.keyRows : result.rows || []) : [];
+    elements.speedTestSelectedBtn.disabled = !site || !result || !result.ok || keyRows.length === 0 || busy;
+    elements.speedTestSelectedBtn.textContent = busy ? '测速中' : '模型测速';
+  }
+  if (elements.selectedSiteBalance) {
+    const balance = selectedSiteBalanceSummary(result);
+    elements.selectedSiteBalance.textContent = result && result.ok ? balanceSummaryText(balance) : '-';
+    const metric = elements.selectedSiteBalance.closest('span');
+    if (metric) {
+      metric.className = `balance-metric ${balanceHealthClass(balance)}`;
+      metric.title = result && result.ok ? `${balance.healthText} · ${balanceSummaryText(balance)}` : '尚未查询余额';
+    }
+  }
+  if (elements.selectedSiteSpeed) {
+    elements.selectedSiteSpeed.textContent = busy ? '测速中...' : speedDetailText(speed);
+  }
+
+  if (!site) {
+    elements.siteOverviewRows.innerHTML = '<div class="empty-state compact"><strong>请选择站点</strong><span>左侧选中站点后，这里展示该站点所有分组。</span></div>';
+    return;
+  }
+  if (!result) {
+    elements.siteOverviewRows.innerHTML = '<div class="empty-state compact"><strong>尚未查询</strong><span>点击查询当前或查询全部后加载分组。</span></div>';
+    return;
+  }
+  if (!result.ok) {
+    const message = result.error && result.error.message ? result.error.message : '查询失败';
+    elements.siteOverviewRows.innerHTML = `<div class="empty-state danger"><strong>查询失败</strong><span>${escapeHtml(message)}</span></div>`;
+    return;
+  }
+
+  const options = groupOptionsFromResult(result).slice().sort((a, b) => {
+    const rateA = toPositiveRate(a.rate);
+    const rateB = toPositiveRate(b.rate);
+    if (rateA !== null && rateB !== null && rateA !== rateB) {
+      return rateA - rateB;
+    }
+    if (rateA !== null && rateB === null) {
+      return -1;
+    }
+    if (rateA === null && rateB !== null) {
+      return 1;
+    }
+    return String(a.label || '').localeCompare(String(b.label || ''), 'zh-Hans-CN');
+  });
+
+  if (options.length === 0) {
+    elements.siteOverviewRows.innerHTML = '<div class="empty-state compact"><strong>没有分组</strong><span>没有拿到该站点的有效分组数据。</span></div>';
+    return;
+  }
+
+  elements.siteOverviewRows.innerHTML = options
+    .map((option) => {
+      const counts = countRowsForFilter(result, option.value);
+      const active = optionMatchesActiveFilter(option) && state.groupFilter !== 'all' ? ' active' : '';
+      const rate = toPositiveRate(option.rate);
+      const rateText = rate === null ? '无倍率' : `x${formatRateValue(rate)}`;
+      const status = option.status && option.status !== 'active' ? option.status : '';
+      const meta = [option.platform || '分组', status].filter(Boolean).join(' · ');
+      return `
+        <button class="selected-site-group-row${active}" type="button" data-group-value="${escapeHtml(option.value)}">
+          <span class="site-group-main">
+            <strong>${escapeHtml(option.label)}</strong>
+            <small>${escapeHtml(meta || '分组')}</small>
+          </span>
+          <span class="site-group-rate">${escapeHtml(rateText)}</span>
+          <span class="site-group-counts">
+            <strong>${escapeHtml(counts.keys)} Key</strong>
+            <small>${escapeHtml(counts.monitors)} 监控</small>
+          </span>
+          <span class="site-group-action">筛选</span>
+        </button>
+      `;
+    })
+    .join('');
+
+  for (const button of elements.siteOverviewRows.querySelectorAll('.selected-site-group-row')) {
+    button.addEventListener('click', () => {
+      const option = options.find((item) => String(item.value) === String(button.dataset.groupValue));
+      selectGroupFromSelectedSite(option);
+    });
+  }
+}
+
+async function speedTestSite(siteId) {
+  if (!siteId || !window.sub2api || typeof window.sub2api.speedTestSite !== 'function') {
+    return;
+  }
+  if (state.speedBusySiteIds.includes(siteId)) {
+    return;
+  }
+  state.speedBusySiteIds = [...state.speedBusySiteIds, siteId];
+  renderSiteOverview();
+  const site = state.sites.find((item) => item.id === siteId);
+  setStatus(`${site ? site.name || site.baseUrl : siteId}: 正在测速...`);
+  try {
+    const result = await window.sub2api.speedTestSite(siteId);
+    state.speedResults = {
+      ...state.speedResults,
+      [siteId]: result
+    };
+    const fastest = result && result.summary && toFiniteNumber(result.summary.fastestLatencyMs) !== null
+      ? `，最快 ${formatLatency(result.summary.fastestLatencyMs)}`
+      : '';
+    setStatus(`${result.siteName || siteId}: 测速完成${fastest}`, result.ok ? 'ok' : 'bad');
+  } catch (error) {
+    state.speedResults = {
+      ...state.speedResults,
+      [siteId]: {
+        ok: false,
+        siteId,
+        error: { message: error && error.message ? error.message : '测速失败' },
+        summary: { total: 0, ok: 0, failed: 0, fastestLatencyMs: null, averageLatencyMs: null },
+        rows: []
+      }
+    };
+    setStatus(`${site ? site.name || site.baseUrl : siteId}: 测速失败`, 'bad');
+  } finally {
+    state.speedBusySiteIds = state.speedBusySiteIds.filter((id) => id !== siteId);
+    renderSiteOverview();
+  }
+}
+
+async function speedTestAllSites() {
+  const rows = buildSiteOverviewRows().filter((row) => row.keyCount > 0);
+  for (const row of rows) {
+    await speedTestSite(row.siteId);
+  }
+}
+
+async function speedTestSelectedSite() {
+  const site = selectedSite();
+  if (!site) {
+    setStatus('请选择站点', 'bad');
+    return;
+  }
+  await speedTestSite(site.id);
 }
 
 function selectComparisonTarget(siteId, groupName, platform, comparisonKey = '') {
@@ -1391,6 +2191,7 @@ function renderResults() {
   }
   renderGroupDirectory(result);
   renderComparison();
+  renderSiteOverview();
 
   if (rows.length === 0) {
     elements.resultRows.innerHTML = '<tr><td class="empty-row" colspan="9">当前站点暂无 API Key 结果</td></tr>';
@@ -1401,7 +2202,7 @@ function renderResults() {
         const custom = toPositiveRate(row.customRate) === null ? '' : formatRateValue(row.customRate);
         const effective = toPositiveRate(row.effectiveRate) === null ? '' : formatRateValue(row.effectiveRate);
         const statusClass = statusClassForValue(row.keyStatus);
-        const quota = row.quota || row.quotaUsed ? `${formatRate(row.quotaUsed || 0)} / ${formatRate(row.quota || 0)}` : '';
+        const quota = rowBalanceText(row);
         return `
           <tr>
             <td><div>${escapeHtml(row.keyName)}</div><div class="mono">${escapeHtml(row.keyMasked)}</div></td>
@@ -1484,6 +2285,7 @@ async function saveSite(event) {
     const site = await window.sub2api.saveSite(readForm());
     state.selectedId = site.id;
     await loadSites({ selectId: site.id });
+    closeSiteModal();
     setStatus('已保存', 'ok');
   } catch (error) {
     setStatus(error.message || '保存失败', 'bad');
@@ -1491,11 +2293,13 @@ async function saveSite(event) {
 }
 
 async function deleteSite() {
-  if (!state.selectedId) {
+  const targetId = elements.siteId && elements.siteId.value ? elements.siteId.value : state.selectedId;
+  if (!targetId) {
     return;
   }
 
-  await window.sub2api.deleteSite(state.selectedId);
+  await window.sub2api.deleteSite(targetId);
+  closeSiteModal();
   clearForm();
   await loadSites();
   setStatus('已删除', 'ok');
@@ -1514,6 +2318,7 @@ async function querySelected() {
   state.results = state.results.filter((item) => item.siteId !== result.siteId).concat(result);
   state.selectedComparisonKey = '';
   renderResults();
+  await saveCurrentSnapshot();
   await loadSites();
   setBusy(false);
   setStatus(result.ok ? '查询完成' : result.error && result.error.message ? result.error.message : '查询失败', result.ok ? 'ok' : 'bad');
@@ -1552,6 +2357,97 @@ async function captureLoginTokens() {
   } catch (error) {
     setStatus(error.message || '采集 token 失败', 'bad');
   }
+}
+
+async function loadPreferences() {
+  if (!window.sub2api || typeof window.sub2api.getPreferences !== 'function') {
+    return;
+  }
+  try {
+    const preferences = await window.sub2api.getPreferences();
+    state.favoriteGroups = Array.isArray(preferences && preferences.favoriteGroups)
+      ? preferences.favoriteGroups
+      : [];
+    state.startupMode = normalizeStartupMode(preferences && preferences.startupMode);
+  } catch {
+    state.favoriteGroups = [];
+    state.startupMode = 'snapshot';
+  }
+  if (elements.startupMode) {
+    elements.startupMode.value = state.startupMode;
+  }
+}
+
+function updateSnapshotButton(snapshot = null) {
+  if (!elements.loadSnapshotBtn) {
+    return;
+  }
+  const hasSnapshot = Boolean(snapshot || state.hasResultSnapshot);
+  elements.loadSnapshotBtn.disabled = !hasSnapshot;
+  elements.loadSnapshotBtn.textContent = hasSnapshot ? '上次结果' : '无上次结果';
+  const updatedAt = snapshot && snapshot.updatedAt ? snapshot.updatedAt : state.resultSnapshotUpdatedAt;
+  elements.loadSnapshotBtn.title = updatedAt ? `加载 ${formatDate(updatedAt)} 的本地快照` : '暂无本地快照';
+}
+
+async function saveCurrentSnapshot() {
+  if (!window.sub2api || typeof window.sub2api.saveResultSnapshot !== 'function') {
+    return null;
+  }
+  if (!Array.isArray(state.results) || state.results.length === 0) {
+    return null;
+  }
+  try {
+    const snapshot = await window.sub2api.saveResultSnapshot({
+      selectedId: state.selectedId,
+      results: state.results
+    });
+    state.hasResultSnapshot = Boolean(snapshot);
+    state.resultSnapshotUpdatedAt = snapshot && snapshot.updatedAt ? snapshot.updatedAt : '';
+    updateSnapshotButton(snapshot);
+    return snapshot;
+  } catch {
+    return null;
+  }
+}
+
+async function loadResultSnapshot(options = {}) {
+  if (!window.sub2api || typeof window.sub2api.getResultSnapshot !== 'function') {
+    updateSnapshotButton(null);
+    return null;
+  }
+  let snapshot = null;
+  try {
+    snapshot = await window.sub2api.getResultSnapshot();
+  } catch {
+    snapshot = null;
+  }
+
+  state.hasResultSnapshot = Boolean(snapshot && Array.isArray(snapshot.results) && snapshot.results.length > 0);
+  state.resultSnapshotUpdatedAt = state.hasResultSnapshot && snapshot.updatedAt ? snapshot.updatedAt : '';
+  updateSnapshotButton(snapshot);
+
+  if (!state.hasResultSnapshot) {
+    if (!options.silent) {
+      renderResults();
+      setStatus(state.sites.length > 0 ? '本地暂无上次结果，点击查询全部获取最新数据。' : '请先保存站点');
+    }
+    return null;
+  }
+
+  if (options.apply === false) {
+    return snapshot;
+  }
+
+  state.results = snapshot.results;
+  if (snapshot.selectedId && state.sites.some((site) => site.id === snapshot.selectedId)) {
+    const site = state.sites.find((item) => item.id === snapshot.selectedId);
+    fillForm(site, { render: false });
+  }
+  renderResults();
+  if (!options.silent) {
+    setStatus(`已加载上次结果 ${formatDate(snapshot.updatedAt)}，可点击查询全部刷新。`, 'ok');
+  }
+  return snapshot;
 }
 
 function positionGroupDropdown() {
@@ -1669,6 +2565,7 @@ async function queryAll() {
     state.results = await window.sub2api.queryAll();
     state.selectedComparisonKey = '';
     renderResults();
+    await saveCurrentSnapshot();
     await loadSites();
 
     const failed = state.results.filter((result) => !result.ok).length;
@@ -1687,20 +2584,69 @@ async function queryAll() {
 function setBusy(isBusy) {
   elements.queryAllBtn.disabled = isBusy;
   elements.querySelectedBtn.disabled = isBusy;
+  if (elements.loadSnapshotBtn) {
+    elements.loadSnapshotBtn.disabled = isBusy || !state.hasResultSnapshot;
+  }
+  if (elements.startupMode) {
+    elements.startupMode.disabled = isBusy;
+  }
   elements.browserLoginBtn.disabled = isBusy;
   elements.captureTokenBtn.disabled = isBusy;
+  if (elements.editSiteBtn) {
+    elements.editSiteBtn.disabled = isBusy || !state.selectedId;
+  }
+  if (elements.speedTestSelectedBtn) {
+    elements.speedTestSelectedBtn.disabled = isBusy || elements.speedTestSelectedBtn.disabled;
+  }
   elements.saveSiteBtn.disabled = isBusy;
   elements.deleteSiteBtn.disabled = isBusy;
 }
 
 async function init() {
   elements.siteForm.addEventListener('submit', saveSite);
-  elements.newSiteBtn.addEventListener('click', clearForm);
+  elements.newSiteBtn.addEventListener('click', prepareNewSite);
+  if (elements.editSiteBtn) {
+    elements.editSiteBtn.addEventListener('click', editSelectedSite);
+  }
+  if (elements.closeSiteModalBtn) {
+    elements.closeSiteModalBtn.addEventListener('click', closeSiteModal);
+  }
+  if (elements.siteModal) {
+    elements.siteModal.addEventListener('click', (event) => {
+      if (event.target === elements.siteModal) {
+        closeSiteModal();
+      }
+    });
+  }
   elements.deleteSiteBtn.addEventListener('click', deleteSite);
   elements.browserLoginBtn.addEventListener('click', openBrowserLogin);
   elements.captureTokenBtn.addEventListener('click', captureLoginTokens);
+  if (elements.loadSnapshotBtn) {
+    elements.loadSnapshotBtn.addEventListener('click', () => {
+      loadResultSnapshot();
+    });
+  }
+  if (elements.startupMode) {
+    elements.startupMode.addEventListener('change', () => {
+      state.startupMode = normalizeStartupMode(elements.startupMode.value);
+      saveStartupMode();
+    });
+  }
   elements.querySelectedBtn.addEventListener('click', querySelected);
   elements.queryAllBtn.addEventListener('click', queryAll);
+  if (elements.favoriteOnlyBtn) {
+    elements.favoriteOnlyBtn.addEventListener('click', () => {
+      state.favoriteOnly = !state.favoriteOnly;
+      state.selectedComparisonKey = '';
+      renderResults();
+    });
+  }
+  if (elements.speedTestAllBtn) {
+    elements.speedTestAllBtn.addEventListener('click', speedTestAllSites);
+  }
+  if (elements.speedTestSelectedBtn) {
+    elements.speedTestSelectedBtn.addEventListener('click', speedTestSelectedSite);
+  }
   if (elements.groupDropdownBtn) {
     elements.groupDropdownBtn.addEventListener('click', () => {
       if (elements.groupDropdownBtn.disabled) {
@@ -1720,8 +2666,12 @@ async function init() {
     }
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && state.groupDropdownOpen) {
-      setGroupDropdownOpen(false);
+    if (event.key === 'Escape') {
+      if (state.groupDropdownOpen) {
+        setGroupDropdownOpen(false);
+      } else if (elements.siteModal && !elements.siteModal.hidden) {
+        closeSiteModal();
+      }
     }
   });
   // Resize handle logic
@@ -1828,11 +2778,35 @@ async function init() {
     elements.storagePath.textContent = '';
   }
 
+  await loadPreferences();
   await loadSites();
-  if (state.sites.length > 0) {
-    await queryAll();
+
+  if (state.startupMode === 'refresh') {
+    await loadResultSnapshot({ silent: true, apply: false });
+    if (state.sites.length > 0) {
+      await queryAll();
+    } else {
+      renderResults();
+      updateSnapshotButton(null);
+      setStatus('请先保存站点');
+    }
+    return;
+  }
+
+  if (state.startupMode === 'blank') {
+    await loadResultSnapshot({ silent: true, apply: false });
+    renderResults();
+    setStatus(state.sites.length > 0 ? '启动为空白模式，可点击上次结果或查询全部。' : '请先保存站点');
+    return;
+  }
+
+  const snapshot = await loadResultSnapshot({ silent: true });
+  if (snapshot) {
+    setStatus(`已加载上次结果 ${formatDate(snapshot.updatedAt)}，可点击查询全部刷新。`, 'ok');
   } else {
     renderResults();
+    updateSnapshotButton(null);
+    setStatus(state.sites.length > 0 ? '本地暂无上次结果，点击查询全部获取最新数据。' : '请先保存站点');
   }
 }
 
@@ -1841,8 +2815,17 @@ const rendererTestHooks = {
   formatRateValue,
   toFiniteNumber,
   toPositiveRate,
+  parseGroupAliasRules,
+  buildBalanceSummary,
+  balanceSummaryText,
+  balanceHealthLevel,
+  balanceHealthText,
+  balanceHealthClass,
+  rowBalanceText,
+  buildSiteOverviewRows,
   buildPriceComparisonGroups,
   renderComparison,
+  renderSiteOverview,
   renderResults,
   __getTestState() {
     return { ...state };

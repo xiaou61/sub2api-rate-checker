@@ -42,6 +42,7 @@ function preloadSource() {
       { id: 'site-3', name: 'Claude 中转', baseUrl: 'https://relay.example.net', provider: 'sub2api', authToken: 'token' },
       { id: 'site-4', name: '待修复站点', baseUrl: 'https://newapi.example.cn', provider: 'newapi' }
     ];
+    let preferences = { favoriteGroups: [], startupMode: 'snapshot' };
 
     const groupNames = [
       ['66api', 'new-api', 0.08],
@@ -137,6 +138,30 @@ function preloadSource() {
 
     contextBridge.exposeInMainWorld('sub2api', {
       listSites: async () => sites,
+      getPreferences: async () => preferences,
+      savePreferences: async (nextPreferences) => {
+        preferences = {
+          ...preferences,
+          ...(nextPreferences || {}),
+          favoriteGroups: Array.isArray(nextPreferences && nextPreferences.favoriteGroups)
+            ? nextPreferences.favoriteGroups
+            : preferences.favoriteGroups,
+          startupMode: ['snapshot', 'refresh', 'blank'].includes(nextPreferences && nextPreferences.startupMode)
+            ? nextPreferences.startupMode
+            : preferences.startupMode
+        };
+        return preferences;
+      },
+      getResultSnapshot: async () => ({
+        updatedAt: '2026-06-27T02:00:00.000Z',
+        selectedId: 'site-1',
+        results: [successResult(sites[0]), successResult(sites[1]), successResult(sites[2]), failedResult]
+      }),
+      saveResultSnapshot: async (snapshot) => ({
+        updatedAt: '2026-06-27T02:05:00.000Z',
+        selectedId: snapshot && snapshot.selectedId ? snapshot.selectedId : '',
+        results: Array.isArray(snapshot && snapshot.results) ? snapshot.results : []
+      }),
       storagePath: async () => 'C:\\\\Users\\\\18525\\\\AppData\\\\Roaming\\\\sub2api-rate-checker\\\\sites.json',
       queryAll: async () => [successResult(sites[0]), successResult(sites[1]), successResult(sites[2]), failedResult],
       querySite: async (id) => successResult(sites.find((site) => site.id === id) || sites[0]),
@@ -240,7 +265,7 @@ async function collectMetrics(win) {
         bestOffer: rect('#bestOffer'),
         filterOffer: rect('#filterOffer'),
         groupMenu: rect('.group-menu:not([hidden])'),
-        detailHead: rect('.detail-head'),
+        selectedSitePanel: rect('.selected-site-panel'),
         summaryStrip: rect('.summary-strip'),
         resultsPanel: rect('.results-panel'),
         monitorPanel: rect('.monitor-panel')
@@ -266,14 +291,14 @@ async function collectMetrics(win) {
       if (regions.comparisonPanel && regions.comparisonHead && regions.comparisonHead.bottom > regions.comparisonPanel.bottom + 1) {
         problems.push('comparison head clipped by comparison panel');
       }
-      if (regions.detailHead && regions.bestOffer && regions.bestOffer.bottom > regions.detailHead.bottom + 1) {
-        problems.push('best offer clipped by detail area');
+      if (regions.comparisonPanel && regions.bestOffer && regions.bestOffer.bottom > regions.comparisonPanel.bottom + 1) {
+        problems.push('best offer clipped by comparison area');
       }
-      if (regions.detailHead && regions.filterOffer && regions.filterOffer.bottom > regions.detailHead.bottom + 1) {
-        problems.push('filter offer clipped by detail area');
+      if (regions.comparisonPanel && regions.filterOffer && regions.filterOffer.bottom > regions.comparisonPanel.bottom + 1) {
+        problems.push('filter offer clipped by comparison area');
       }
-      if (regions.detailHead && regions.detailHead.width < 200 && window.innerWidth >= 900) {
-        problems.push('detail column too narrow ' + regions.detailHead.width);
+      if (regions.selectedSitePanel && regions.selectedSitePanel.width < 200 && window.innerWidth >= 900) {
+        problems.push('selected site column too narrow ' + regions.selectedSitePanel.width);
       }
       const groupMenu = document.querySelector('.group-menu:not([hidden])');
       if (groupMenu && getComputedStyle(groupMenu).position !== 'fixed') {
@@ -343,7 +368,7 @@ async function captureViewport(viewport) {
   await screenshot(win, path.join(outputDir, `${viewport.name}-open.png`));
 
   const closedCompare = closedMetrics.regions.comparisonPanel;
-  const closedDetail = closedMetrics.regions.detailHead;
+  const closedDetail = closedMetrics.regions.selectedSitePanel;
   const openCompare = openMetrics.regions.comparisonPanel;
   if (closedCompare && closedDetail) {
     const splitDiff = Math.abs(closedCompare.width - closedDetail.width);

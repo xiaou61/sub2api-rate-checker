@@ -14,6 +14,68 @@ function normalizeProvider(value) {
     : 'sub2api';
 }
 
+const SNAPSHOT_SECRET_KEYS = new Set([
+  'apiKey',
+  'authToken',
+  'refreshToken',
+  'password',
+  'real_key',
+  'full_key',
+  'token',
+  'key',
+  'value'
+]);
+
+const STARTUP_MODES = new Set(['snapshot', 'refresh', 'blank']);
+
+function normalizeStartupMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  return STARTUP_MODES.has(mode) ? mode : 'snapshot';
+}
+
+function normalizePreferences(input) {
+  const preferences = input && typeof input === 'object' ? input : {};
+  return {
+    favoriteGroups: Array.isArray(preferences.favoriteGroups) ? preferences.favoriteGroups : [],
+    startupMode: normalizeStartupMode(preferences.startupMode)
+  };
+}
+
+function sanitizeSnapshotValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeSnapshotValue(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const output = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (SNAPSHOT_SECRET_KEYS.has(key)) {
+      continue;
+    }
+    output[key] = sanitizeSnapshotValue(child);
+  }
+  return output;
+}
+
+function normalizeResultSnapshot(input) {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+  const results = Array.isArray(input.results)
+    ? input.results.map((result) => sanitizeSnapshotValue(result)).filter(Boolean)
+    : [];
+  if (results.length === 0) {
+    return null;
+  }
+  return {
+    updatedAt: String(input.updatedAt || nowIso()),
+    selectedId: String(input.selectedId || ''),
+    results
+  };
+}
+
 function createStorage(userDataPath) {
   const filePath = path.join(userDataPath, 'sites.json');
 
@@ -31,7 +93,9 @@ function createStorage(userDataPath) {
       const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
       return {
         version: 1,
-        sites: Array.isArray(parsed.sites) ? parsed.sites : []
+        sites: Array.isArray(parsed.sites) ? parsed.sites : [],
+        preferences: normalizePreferences(parsed.preferences),
+        resultSnapshot: normalizeResultSnapshot(parsed.resultSnapshot)
       };
     } catch {
       return { version: 1, sites: [] };
@@ -45,6 +109,53 @@ function createStorage(userDataPath) {
 
   function listSites() {
     return read().sites;
+  }
+
+  function getPreferences() {
+    const data = read();
+    return normalizePreferences(data.preferences);
+  }
+
+  function savePreferences(input) {
+    const data = read();
+    const existingPreferences = normalizePreferences(data.preferences);
+    const favoriteGroups = Array.isArray(input && input.favoriteGroups)
+      ? input.favoriteGroups
+        .map((group) => String(group || '').trim())
+        .filter(Boolean)
+      : existingPreferences.favoriteGroups;
+    data.preferences = {
+      ...existingPreferences,
+      favoriteGroups: Array.from(new Set(favoriteGroups)),
+      startupMode: input && input.startupMode !== undefined
+        ? normalizeStartupMode(input.startupMode)
+        : existingPreferences.startupMode
+    };
+    write(data);
+    return data.preferences;
+  }
+
+  function getResultSnapshot() {
+    const data = read();
+    return data.resultSnapshot || null;
+  }
+
+  function saveResultSnapshot(input) {
+    const data = read();
+    const snapshot = normalizeResultSnapshot({
+      ...(input && typeof input === 'object' ? input : {}),
+      updatedAt: nowIso()
+    });
+    data.resultSnapshot = snapshot;
+    write(data);
+    return snapshot;
+  }
+
+  function clearResultSnapshot() {
+    const data = read();
+    data.resultSnapshot = null;
+    write(data);
+    return true;
   }
 
   function getSite(id) {
@@ -68,6 +179,8 @@ function createStorage(userDataPath) {
       refreshToken: input.refreshToken !== undefined ? String(input.refreshToken || '') : existing ? existing.refreshToken || '' : '',
       tokenExpiresAt: input.tokenExpiresAt !== undefined ? input.tokenExpiresAt || '' : existing ? existing.tokenExpiresAt || '' : '',
       newApiUserId: input.newApiUserId !== undefined ? String(input.newApiUserId || '') : existing ? existing.newApiUserId || '' : '',
+      speedTestModel: input.speedTestModel !== undefined ? String(input.speedTestModel || '').trim() : existing ? existing.speedTestModel || '' : '',
+      groupAliases: input.groupAliases !== undefined ? String(input.groupAliases || '') : existing ? existing.groupAliases || '' : '',
       notes: String(input.notes || ''),
       createdAt: existing ? existing.createdAt || timestamp : timestamp,
       updatedAt: timestamp
@@ -128,6 +241,11 @@ function createStorage(userDataPath) {
     listSites,
     getSite,
     saveSite,
+    getPreferences,
+    savePreferences,
+    getResultSnapshot,
+    saveResultSnapshot,
+    clearResultSnapshot,
     updateTokens,
     deleteSite
   };

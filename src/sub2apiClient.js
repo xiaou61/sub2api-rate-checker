@@ -340,6 +340,40 @@ function toFiniteNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function toBooleanFlag(value) {
+  if (value === true || value === 1) {
+    return true;
+  }
+  if (value === false || value === 0 || value === null || value === undefined || value === '') {
+    return false;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  return ['1', 'true', 'yes', 'y', 'on', 'unlimited', 'infinite'].includes(normalized);
+}
+
+function hasUnlimitedQuota(row, directQuota) {
+  const flag = firstValue(
+    row && row.unlimited_quota,
+    row && row.unlimitedQuota,
+    row && row.is_unlimited,
+    row && row.isUnlimited,
+    row && row.unlimited
+  );
+  const rawQuota = firstValue(
+    row && row.quota,
+    row && row.total_quota,
+    row && row.totalQuota,
+    row && row.total,
+    row && row.quota_limit,
+    row && row.quotaLimit,
+    row && row.limit
+  );
+  const quotaText = String(rawQuota || '').trim().toLowerCase();
+  return toBooleanFlag(flag) ||
+    (directQuota !== null && directQuota < 0) ||
+    ['unlimited', 'infinite', 'inf'].includes(quotaText);
+}
+
 function toPositiveNumber(value) {
   const number = toFiniteNumber(value);
   return number !== null && number > 0 ? number : null;
@@ -470,6 +504,319 @@ function maskKey(key) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
+function openAiCompatibleChatUrl(site) {
+  const webBase = normalizeWebBase(site);
+  return new URL('/v1/chat/completions', webBase).toString();
+}
+
+function shortErrorMessage(error) {
+  const message = error && error.message ? String(error.message) : String(error || '请求失败');
+  return message.length > 140 ? `${message.slice(0, 140)}...` : message;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function keyRowsWithApiKeys(payload) {
+  const rows = Array.isArray(payload && payload.keyRows)
+    ? payload.keyRows
+    : Array.isArray(payload && payload.rows)
+      ? payload.rows
+      : [];
+  return rows.filter((row) => row && typeof row.apiKey === 'string' && row.apiKey.trim());
+}
+
+function modelNamesFromMonitor(row) {
+  const names = [];
+  if (row && row.primaryModel) {
+    names.push(row.primaryModel);
+  }
+  for (const item of row && Array.isArray(row.models) ? row.models : []) {
+    const name = firstValue(item.model, item.name, item.id);
+    if (name) {
+      names.push(name);
+    }
+  }
+  return names.map((name) => String(name || '').trim()).filter(Boolean);
+}
+
+function buildSpeedTestModelHints(payload) {
+  const monitorRows = Array.isArray(payload && payload.monitorRows) ? payload.monitorRows : [];
+  const hints = {
+    byGroupPlatform: new Map(),
+    byGroup: new Map(),
+    byPlatform: new Map(),
+    first: ''
+  };
+
+  for (const row of monitorRows) {
+    const model = modelNamesFromMonitor(row)[0];
+    if (!model) {
+      continue;
+    }
+    if (!hints.first) {
+      hints.first = model;
+    }
+    const group = normalizeText(row.groupName);
+    const platform = normalizeText(row.provider || row.platform);
+    if (group && platform) {
+      hints.byGroupPlatform.set(`${group}|${platform}`, model);
+    }
+    if (group && !hints.byGroup.has(group)) {
+      hints.byGroup.set(group, model);
+    }
+    if (platform && !hints.byPlatform.has(platform)) {
+      hints.byPlatform.set(platform, model);
+    }
+  }
+
+  return hints;
+}
+
+function fallbackSpeedTestModel(row) {
+  const platform = normalizeText(row && row.platform);
+  const groupName = normalizeText(row && row.groupName);
+  const text = `${platform} ${groupName}`;
+  if (text.includes('claude') || text.includes('anthropic')) {
+    return 'claude-3-5-haiku-20241022';
+  }
+  if (text.includes('gemini') || text.includes('google')) {
+    return 'gemini-1.5-flash';
+  }
+  if (text.includes('deepseek')) {
+    return 'deepseek-chat';
+  }
+  return 'gpt-4o-mini';
+}
+
+function selectSpeedTestModel(site, row, hints, options = {}) {
+  const explicit = firstValue(options.model, row && row.testModel, site && site.speedTestModel);
+  if (explicit) {
+    return String(explicit).trim();
+  }
+
+  const group = normalizeText(row && row.groupName);
+  const platform = normalizeText(row && row.platform);
+  if (group && platform && hints.byGroupPlatform.has(`${group}|${platform}`)) {
+    return hints.byGroupPlatform.get(`${group}|${platform}`);
+  }
+  if (group && hints.byGroup.has(group)) {
+    return hints.byGroup.get(group);
+  }
+  if (platform && hints.byPlatform.has(platform)) {
+    return hints.byPlatform.get(platform);
+  }
+  return hints.first || fallbackSpeedTestModel(row);
+}
+
+function buildChatSpeedTestBody(model) {
+  return {
+    model,
+    messages: [
+      { role: 'user', content: 'hi' }
+    ],
+    max_tokens: 8,
+    stream: false
+  };
+}
+
+async function readResponseText(response) {
+  const text = await response.text();
+  return text.length > 16000 ? `${text.slice(0, 16000)}...` : text;
+}
+
+function parseJsonMaybe(text) {
+  if (!text) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function extractChatResponseText(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return '';
+  }
+  const choice = Array.isArray(payload.choices) ? payload.choices[0] : null;
+  const message = choice && choice.message ? choice.message : null;
+  const content = message ? message.content : null;
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => typeof item === 'string'
+        ? item
+        : item && typeof item === 'object'
+          ? firstValue(item.text, item.content)
+          : '')
+      .filter(Boolean)
+      .join('')
+      .trim();
+  }
+  return String(firstValue(payload.output_text, payload.text) || '').trim();
+}
+
+function extractResponseError(payload, fallback) {
+  if (payload && typeof payload === 'object') {
+    const error = payload.error;
+    if (typeof error === 'string') {
+      return error;
+    }
+    if (error && typeof error === 'object') {
+      return String(firstValue(error.message, error.reason, error.code) || fallback);
+    }
+    return String(firstValue(payload.message, payload.reason, payload.code) || fallback);
+  }
+  return fallback;
+}
+
+async function speedTestKeyRow(site, row, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 8000);
+  const url = openAiCompatibleChatUrl(site);
+  const model = selectSpeedTestModel(site, row, options.modelHints || buildSpeedTestModelHints(options.payload), options);
+  const body = buildChatSpeedTestBody(model);
+  const startedAt = Date.now();
+  try {
+    const response = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${row.apiKey}`
+      },
+      body: JSON.stringify(body)
+    }, timeoutMs);
+    const latencyMs = Date.now() - startedAt;
+    const responseText = await readResponseText(response);
+    const payload = parseJsonMaybe(responseText);
+    const reply = extractChatResponseText(payload);
+    const ok = response.ok && reply.length > 0;
+    const message = ok
+      ? '模型已响应'
+      : response.ok
+        ? 'HTTP 2xx 但模型回复为空'
+        : extractResponseError(payload, `HTTP ${response.status}`);
+    return {
+      siteId: site.id,
+      siteName: site.name || site.baseUrl,
+      baseUrl: site.baseUrl,
+      provider: normalizeSiteProvider(site),
+      keyId: row.keyId,
+      keyName: row.keyName || '',
+      keyMasked: row.keyMasked || maskKey(row.apiKey),
+      groupId: row.groupId ?? null,
+      groupName: row.groupName || '',
+      platform: row.platform || '',
+      model,
+      status: ok ? 'ok' : 'failed',
+      ok,
+      httpStatus: response.status,
+      latencyMs,
+      message,
+      responseText: reply ? shortErrorMessage(reply) : '',
+      testedAt: new Date().toISOString()
+    };
+  } catch (error) {
+    return {
+      siteId: site.id,
+      siteName: site.name || site.baseUrl,
+      baseUrl: site.baseUrl,
+      provider: normalizeSiteProvider(site),
+      keyId: row.keyId,
+      keyName: row.keyName || '',
+      keyMasked: row.keyMasked || maskKey(row.apiKey),
+      groupId: row.groupId ?? null,
+      groupName: row.groupName || '',
+      platform: row.platform || '',
+      model,
+      status: 'failed',
+      ok: false,
+      httpStatus: 0,
+      latencyMs: Date.now() - startedAt,
+      message: shortErrorMessage(error),
+      testedAt: new Date().toISOString()
+    };
+  }
+}
+
+async function speedTestSite(inputSite, options = {}) {
+  const site = { ...inputSite };
+  const payload = options.payload || await querySite(site);
+  const rows = keyRowsWithApiKeys(payload);
+  const limit = Math.max(1, Math.min(Number(options.concurrency || 4), 8));
+  const testedAt = new Date().toISOString();
+  const modelHints = buildSpeedTestModelHints(payload);
+
+  if (rows.length === 0) {
+    return {
+      ok: false,
+      siteId: site.id,
+      siteName: site.name || site.baseUrl,
+      baseUrl: site.baseUrl,
+      provider: normalizeSiteProvider(site),
+      testedAt,
+      summary: {
+        total: 0,
+        ok: 0,
+        failed: 0,
+        fastestLatencyMs: null,
+        averageLatencyMs: null
+      },
+      rows: [],
+      error: {
+        name: 'Sub2ApiError',
+        message: '没有可测速的 API Key',
+        status: 0,
+        code: 'NO_API_KEYS'
+      }
+    };
+  }
+
+  const results = await mapLimit(rows, limit, (row) => speedTestKeyRow(site, row, {
+    ...options,
+    payload,
+    modelHints
+  }));
+  const okRows = results.filter((row) => row.ok);
+  const fastestLatencyMs = okRows.length
+    ? Math.min(...okRows.map((row) => row.latencyMs))
+    : null;
+  const averageLatencyMs = okRows.length
+    ? okRows.reduce((sum, row) => sum + row.latencyMs, 0) / okRows.length
+    : null;
+
+  return {
+    ok: okRows.length > 0,
+    siteId: site.id,
+    siteName: site.name || site.baseUrl,
+    baseUrl: site.baseUrl,
+    provider: normalizeSiteProvider(site),
+    testedAt,
+    summary: {
+      total: results.length,
+      ok: okRows.length,
+      failed: results.length - okRows.length,
+      fastestLatencyMs,
+      averageLatencyMs
+    },
+    rows: results
+  };
+}
+
 function buildRows(site, keys, groups, rates) {
   const groupMap = new Map();
   for (const group of groups || []) {
@@ -482,6 +829,58 @@ function buildRows(site, keys, groups, rates) {
     const customRate = groupId === null ? undefined : rates[String(groupId)] ?? rates[Number(groupId)];
     const defaultRate = group && group.rate_multiplier !== undefined ? Number(group.rate_multiplier) : null;
     const effectiveRate = customRate !== undefined && customRate !== null ? Number(customRate) : defaultRate;
+    const quotaUsed = toFiniteNumber(firstValue(
+      key.quota_used,
+      key.quotaUsed,
+      key.used_quota,
+      key.usedQuota,
+      key.used_amount,
+      key.usedAmount,
+      key.used_tokens,
+      key.usedTokens,
+      key.consumed_quota,
+      key.consumedQuota,
+      key.used
+    ));
+    const quotaRemaining = toFiniteNumber(firstValue(
+      key.remain_quota,
+      key.remainQuota,
+      key.remain,
+      key.remaining_quota,
+      key.remainingQuota,
+      key.remaining,
+      key.quota_remaining,
+      key.quotaRemaining,
+      key.remained_quota,
+      key.available_quota,
+      key.availableQuota,
+      key.available,
+      key.left_quota,
+      key.leftQuota,
+      key.quota_left,
+      key.quotaLeft,
+      key.balance
+    ));
+    const directQuota = toFiniteNumber(firstValue(
+      key.quota,
+      key.total_quota,
+      key.totalQuota,
+      key.total,
+      key.quota_limit,
+      key.quotaLimit,
+      key.limit,
+      key.amount,
+      key.total_amount,
+      key.totalAmount
+    ));
+    const unlimitedQuota = hasUnlimitedQuota(key, directQuota);
+    const quota = unlimitedQuota
+      ? null
+      : directQuota !== null
+        ? directQuota
+        : quotaUsed !== null && quotaRemaining !== null
+          ? quotaUsed + quotaRemaining
+          : null;
 
     return {
       siteId: site.id,
@@ -490,6 +889,7 @@ function buildRows(site, keys, groups, rates) {
       keyId: key.id,
       keyName: key.name || '',
       keyMasked: maskKey(key.key),
+      apiKey: key.key || '',
       keyStatus: key.status || '',
       groupId,
       groupName: group ? group.name : '',
@@ -497,8 +897,10 @@ function buildRows(site, keys, groups, rates) {
       defaultRate,
       customRate: customRate === undefined || customRate === null ? null : Number(customRate),
       effectiveRate,
-      quota: key.quota ?? null,
-      quotaUsed: key.quota_used ?? null,
+      quota,
+      quotaUsed,
+      quotaRemaining,
+      unlimitedQuota,
       expiresAt: key.expires_at || '',
       lastUsedAt: key.last_used_at || ''
     };
@@ -985,10 +1387,48 @@ function buildNewApiRows(site, tokens, groups, profile) {
     const groupName = groupNameFromNewApiValue(rawGroup);
     const group = groupName ? groupMap.get(normalizeText(groupName)) || null : null;
     const rate = group ? toPositiveNumber(group.rate_multiplier) : null;
-    const usedQuota = toFiniteNumber(firstValue(token.used_quota, token.usedQuota, token.used_amount, token.used));
-    const remainQuota = toFiniteNumber(firstValue(token.remain_quota, token.remainQuota, token.remained_quota));
-    const directQuota = toFiniteNumber(firstValue(token.quota, token.total_quota, token.totalQuota));
-    const quota = token.unlimited_quota || token.unlimitedQuota
+    const usedQuota = toFiniteNumber(firstValue(
+      token.used_quota,
+      token.usedQuota,
+      token.used_amount,
+      token.usedAmount,
+      token.used_tokens,
+      token.usedTokens,
+      token.consumed_quota,
+      token.consumedQuota,
+      token.used
+    ));
+    const remainQuota = toFiniteNumber(firstValue(
+      token.remain_quota,
+      token.remainQuota,
+      token.remained_quota,
+      token.remaining_quota,
+      token.remainingQuota,
+      token.remaining,
+      token.remain,
+      token.available_quota,
+      token.availableQuota,
+      token.available,
+      token.left_quota,
+      token.leftQuota,
+      token.quota_left,
+      token.quotaLeft,
+      token.balance
+    ));
+    const directQuota = toFiniteNumber(firstValue(
+      token.quota,
+      token.total_quota,
+      token.totalQuota,
+      token.total,
+      token.quota_limit,
+      token.quotaLimit,
+      token.limit,
+      token.amount,
+      token.total_amount,
+      token.totalAmount
+    ));
+    const unlimitedQuota = hasUnlimitedQuota(token, directQuota);
+    const quota = unlimitedQuota
       ? null
       : directQuota !== null
         ? directQuota
@@ -1003,6 +1443,7 @@ function buildNewApiRows(site, tokens, groups, profile) {
       keyId: firstValue(token.id, token.token_id, token.tokenId),
       keyName: firstValue(token.name, token.token_name, token.tokenName) || '',
       keyMasked: maskKey(firstValue(token.key, token.token, token.value)),
+      apiKey: firstValue(token.key, token.token, token.value) || '',
       keyStatus: normalizeNewApiStatus(firstValue(token.status, token.enabled)),
       groupId: group ? group.id : groupName || null,
       groupName: group ? group.name : groupName,
@@ -1012,6 +1453,8 @@ function buildNewApiRows(site, tokens, groups, profile) {
       effectiveRate: rate,
       quota,
       quotaUsed: usedQuota,
+      quotaRemaining: remainQuota,
+      unlimitedQuota,
       expiresAt: toIsoDate(firstValue(token.expired_time, token.expires_at, token.expiredAt)),
       lastUsedAt: toIsoDate(firstValue(token.accessed_time, token.last_used_at, token.lastUsedAt))
     };
@@ -1036,10 +1479,54 @@ function buildNewApiUsageRow(site, usage, groups, token) {
       ? groups[0]
       : null;
   const rate = group ? toPositiveNumber(group.rate_multiplier) : null;
-  const totalGranted = toFiniteNumber(firstValue(usage.total_granted, usage.totalGranted, usage.quota, usage.total_quota));
-  const totalAvailable = toFiniteNumber(firstValue(usage.total_available, usage.totalAvailable, usage.remain_quota, usage.remainQuota));
-  const totalUsed = toFiniteNumber(firstValue(usage.total_used, usage.totalUsed, usage.used_quota, usage.usedQuota));
-  const quota = usage.unlimited_quota || usage.unlimitedQuota
+  const totalGranted = toFiniteNumber(firstValue(
+    usage.total_granted,
+    usage.totalGranted,
+    usage.quota,
+    usage.total_quota,
+    usage.totalQuota,
+    usage.total,
+    usage.quota_limit,
+    usage.quotaLimit,
+    usage.limit,
+    usage.amount,
+    usage.total_amount,
+    usage.totalAmount
+  ));
+  const totalAvailable = toFiniteNumber(firstValue(
+    usage.total_available,
+    usage.totalAvailable,
+    usage.remain_quota,
+    usage.remainQuota,
+    usage.remained_quota,
+    usage.remaining_quota,
+    usage.remainingQuota,
+    usage.remaining,
+    usage.remain,
+    usage.available_quota,
+    usage.availableQuota,
+    usage.available,
+    usage.left_quota,
+    usage.leftQuota,
+    usage.quota_left,
+    usage.quotaLeft,
+    usage.balance
+  ));
+  const totalUsed = toFiniteNumber(firstValue(
+    usage.total_used,
+    usage.totalUsed,
+    usage.used_quota,
+    usage.usedQuota,
+    usage.used_amount,
+    usage.usedAmount,
+    usage.used_tokens,
+    usage.usedTokens,
+    usage.consumed_quota,
+    usage.consumedQuota,
+    usage.used
+  ));
+  const unlimitedQuota = hasUnlimitedQuota(usage, totalGranted);
+  const quota = unlimitedQuota
     ? null
     : totalGranted !== null
       ? totalGranted
@@ -1054,6 +1541,7 @@ function buildNewApiUsageRow(site, usage, groups, token) {
     keyId: firstValue(usage.id, usage.token_id, usage.tokenId) || 'current',
     keyName: firstValue(usage.name, usage.token_name, usage.tokenName) || '当前 API Key',
     keyMasked: maskKey(token),
+    apiKey: token || '',
     keyStatus: normalizeNewApiStatus(firstValue(usage.status, usage.enabled, 'active')),
     groupId: group ? group.id : groupName || null,
     groupName: group ? group.name : groupName,
@@ -1063,6 +1551,8 @@ function buildNewApiUsageRow(site, usage, groups, token) {
     effectiveRate: rate,
     quota,
     quotaUsed: totalUsed,
+    quotaRemaining: totalAvailable,
+    unlimitedQuota,
     expiresAt: toIsoDate(firstValue(usage.expires_at, usage.expiresAt)),
     lastUsedAt: ''
   };
@@ -1232,5 +1722,6 @@ module.exports = {
   login,
   refreshToken,
   querySite,
+  speedTestSite,
   serializeError
 };
